@@ -1,42 +1,84 @@
-// Cloudflare Worker template for Reddit-token ingestion.
-// Store secrets with:
-// wrangler secret put REDDIT_CLIENT_ID
-// wrangler secret put REDDIT_CLIENT_SECRET
-// wrangler secret put REDDIT_REFRESH_TOKEN
-//
-// Bind KV as MATCH_CACHE. The frontend expects:
-//   GET /games
-//   GET /match-stats
-//   GET /health
+import gamesSeed from "./cache/gamesSeed.mjs";
+import matchStatsSeed from "./cache/matchStatsSeed.mjs";
 
-const CACHE_TTL_SECONDS = 90;
+const CACHE_HEADERS = {
+  "content-type": "application/json; charset=utf-8",
+  "access-control-allow-origin": "*",
+  "cache-control": "public, max-age=60"
+};
 
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === "/health") return json({ ok: true, updated: new Date().toISOString() });
-    if (url.pathname === "/games") return cachedJson("games", env, ctx, () => fetchRedditJson(env, "wc_live_games"));
-    if (url.pathname === "/match-stats") return cachedJson("match-stats", env, ctx, () => fetchRedditJson(env, "wc_match_stats"));
+    if (request.method === "OPTIONS") return json({}, 204);
+    if (url.pathname === "/health") return health(env);
+    if (url.pathname === "/games") return json(await games(env));
+    if (url.pathname === "/match-stats") return json(await matchStats(env));
+    if (url.pathname === "/") return json({
+      name: "world-cup-officiating-monitor-api",
+      plan: "free static-first worker",
+      endpoints: ["/health", "/games", "/match-stats"]
+    });
     return json({ error: "not found" }, 404);
   }
 };
 
-async function cachedJson(key, env, ctx, load) {
-  const cached = await env.MATCH_CACHE?.get(key, "json");
-  if (cached?.updatedAt && Date.now() - new Date(cached.updatedAt).getTime() < CACHE_TTL_SECONDS * 1000) {
-    return json(cached.payload);
+async function health(env) {
+  return json({
+    ok: true,
+    mode: hasReddit(env) ? "reddit-plus-static-fallback" : "static-free-cache",
+    paid_tokens: false,
+    updated: new Date().toISOString()
+  });
+}
+
+async function games(env) {
+  if (hasReddit(env)) {
+    const reddit = await tryReddit(env, "wc_live_games");
+    if (reddit) return reddit;
   }
-  const payload = await load();
-  ctx.waitUntil(env.MATCH_CACHE?.put(key, JSON.stringify({ updatedAt: new Date().toISOString(), payload })));
-  return json(payload);
+  return annotate(gamesSeed, "free-static-worker-cache");
+}
+
+async function matchStats(env) {
+  if (hasReddit(env)) {
+    const reddit = await tryReddit(env, "wc_match_stats");
+    if (reddit) return reddit;
+  }
+  return annotate(matchStatsSeed, "free-static-worker-cache");
+}
+
+function annotate(payload, source) {
+  return {
+    ...payload,
+    meta: {
+      ...(payload.meta || {}),
+      source,
+      served_at: new Date().toISOString(),
+      paid_tokens: false
+    }
+  };
+}
+
+function hasReddit(env) {
+  return Boolean(env.REDDIT_CLIENT_ID && env.REDDIT_CLIENT_SECRET && env.REDDIT_REFRESH_TOKEN);
+}
+
+async function tryReddit(env, wikiPage) {
+  try {
+    return await fetchRedditJson(env, wikiPage);
+  } catch (error) {
+    return null;
+  }
 }
 
 async function fetchRedditJson(env, wikiPage) {
   const token = await redditAccessToken(env);
-  const res = await fetch(`https://oauth.reddit.com/r/${env.REDDIT_SUBREDDIT || "worldcup"}/wiki/${wikiPage}.json`, {
+  const subreddit = env.REDDIT_SUBREDDIT || "worldcup";
+  const res = await fetch(`https://oauth.reddit.com/r/${subreddit}/wiki/${wikiPage}.json`, {
     headers: {
       Authorization: `Bearer ${token}`,
-      "User-Agent": "world-cup-officiating-monitor/0.1 by portfolio"
+      "User-Agent": "world-cup-officiating-monitor/0.2 by jackholitza"
     }
   });
   if (!res.ok) throw new Error(`Reddit fetch failed: ${res.status}`);
@@ -52,7 +94,7 @@ async function redditAccessToken(env) {
     headers: {
       Authorization: `Basic ${basic}`,
       "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "world-cup-officiating-monitor/0.1 by portfolio"
+      "User-Agent": "world-cup-officiating-monitor/0.2 by jackholitza"
     },
     body: new URLSearchParams({
       grant_type: "refresh_token",
@@ -69,11 +111,5 @@ function extractJson(markdown) {
 }
 
 function json(payload, status = 200) {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "access-control-allow-origin": "*"
-    }
-  });
+  return new Response(JSON.stringify(payload), { status, headers: CACHE_HEADERS });
 }

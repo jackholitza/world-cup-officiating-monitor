@@ -6,7 +6,9 @@ import liveSeed from "./data/liveSeed.js";
 import historical from "./data/officiatingHistorical.js";
 
 const app = document.querySelector("#app");
-const API_BASE = location.hostname.includes("localhost") || location.hostname.includes("127.0.0.1") ? "/api" : "";
+const API_BASE = location.hostname.includes("localhost") || location.hostname.includes("127.0.0.1")
+  ? "/api"
+  : "https://world-cup-officiating-monitor-api.jack-holitza.workers.dev";
 const byTeam = new Map(teams.map((team) => [team.country, team]));
 const strengthByTeam = new Map(strengths.map((team) => [team.country, team]));
 const fixtureById = new Map(fixtures.map((match) => [match.match_id, match]));

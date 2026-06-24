@@ -1,0 +1,7 @@
+name = "world-cup-officiating-monitor-api"
+main = "src/worker/reddit-worker.js"
+compatibility_date = "2026-06-24"
+workers_dev = true
+
+[vars]
+REDDIT_SUBREDDIT = "worldcup"
