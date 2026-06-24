@@ -6,7 +6,6 @@ import disciplineSeed from "./data/disciplineSeed.js";
 import referees from "./data/referees.js";
 
 const app = document.querySelector("#app");
-const WCLIVE_API = "https://wc26liveapi.jack-holitza.workers.dev";
 const DISCIPLINE_API = "https://world-cup-officiating-monitor-api.jack-holitza.workers.dev";
 const state = {
   games: [],
@@ -14,6 +13,7 @@ const state = {
   active: "today",
   selectedMatchId: "GA1",
   selectedTeam: "Mexico",
+  sort: "today",
   status: "cache",
   updated: new Date()
 };
@@ -180,6 +180,28 @@ function refTable() {
   return [...rows.values()].sort((a, b) => b.matches - a.matches || b.yellows - a.yellows);
 }
 
+function refSeason(referee) {
+  const matches = state.stats.filter((stat) => stat.referee === referee);
+  const totals = matches.reduce((sum, stat) => {
+    sum.yellows += stat.yellow_cards;
+    sum.reds += stat.red_cards;
+    sum.fouls += stat.home_fouls + stat.away_fouls;
+    sum.lopsided += Math.abs(stat.home_fouls - stat.away_fouls) >= 7 ? 1 : 0;
+    sum.fair += Math.abs(stat.home_fouls - stat.away_fouls) <= 3 && stat.red_cards === 0 ? 1 : 0;
+    return sum;
+  }, { yellows: 0, reds: 0, fouls: 0, lopsided: 0, fair: 0 });
+  return {
+    matches: matches.length,
+    yellows: totals.yellows,
+    reds: totals.reds,
+    fouls: totals.fouls,
+    lopsided: totals.lopsided,
+    fair: totals.fair,
+    cardsPerMatch: matches.length ? (totals.yellows + totals.reds) / matches.length : 0,
+    foulsPerMatch: matches.length ? totals.fouls / matches.length : 0
+  };
+}
+
 function selectedMatch() {
   return fixtureById.get(state.selectedMatchId) || fixtures[0];
 }
@@ -187,7 +209,7 @@ function selectedMatch() {
 async function refresh() {
   try {
     const [gamesRes, statsRes] = await Promise.all([
-      fetch(`${WCLIVE_API}/games`, { cache: "no-store" }),
+      fetch(`${DISCIPLINE_API}/games`, { cache: "no-store" }),
       fetch(`${DISCIPLINE_API}/match-stats`, { cache: "no-store" })
     ]);
     const gamesPayload = gamesRes.ok ? await gamesRes.json() : null;
@@ -196,7 +218,7 @@ async function refresh() {
     const nextStats = payloadArray(statsPayload).map(normalizeStats);
     if (nextGames.length) state.games = nextGames;
     if (nextStats.length) state.stats = nextStats;
-    state.status = `${nextGames.length ? "WCLive" : "cache"} + ${nextStats.length ? "ref cache" : "local cache"}`;
+    state.status = `${nextGames.length ? "Worker games" : "cache"} + ${nextStats.length ? "ref cache" : "local cache"}`;
   } catch {
     state.status = "offline cache";
   }
@@ -238,12 +260,27 @@ function tab(id, label) {
 }
 
 function todayView(match, stats, game, discipline) {
-  const queue = fixtures.filter((fixture) => ["FT", "FT?"].includes(matchStatus(fixture)) || new Date(fixture.datetime_mt) >= Date.now() - 86400000).slice(0, 14);
+  const queue = sortedMatches();
   const ref = refereeByName.get(stats.referee) || {};
+  const season = refSeason(stats.referee);
   const cards = stats.card_events || [];
   const fouls = stats.foul_events || [];
+  const risks = discipline.filter((player) => [match.home, match.away].includes(player.team) && (player.atRisk || player.red)).slice(0, 8);
   return `
     <main class="matchday">
+      <section class="match-board">
+        <div class="board-head">
+          <div><h2>Matches</h2><span>${matchdayLabel()}</span></div>
+          <label>Sort<select data-sort>
+            <option value="today" ${state.sort === "today" ? "selected" : ""}>Today</option>
+            <option value="live" ${state.sort === "live" ? "selected" : ""}>Live / Finished</option>
+            <option value="upcoming" ${state.sort === "upcoming" ? "selected" : ""}>Upcoming</option>
+            <option value="cards" ${state.sort === "cards" ? "selected" : ""}>Most cards</option>
+            <option value="fouls" ${state.sort === "fouls" ? "selected" : ""}>Most fouls</option>
+          </select></label>
+        </div>
+        <div class="match-card-list">${queue.map(matchCard).join("")}</div>
+      </section>
       <section class="hero-match">
         <div class="match-kicker">Group ${match.group} · ${match.venue} · ${matchStatus(match)}</div>
         <div class="scoreline">
@@ -263,6 +300,16 @@ function todayView(match, stats, game, discipline) {
           ${pill("VAR", `${stats.var_reviews}`)}
         </div>
         <div class="fan-read">${fanRead(match, stats)}</div>
+        <div class="ref-season">
+          <h2>${stats.referee}'s tournament</h2>
+          <div class="stat-row">
+            ${pill("Matches", season.matches)}
+            ${pill("Cards/match", season.cardsPerMatch.toFixed(1))}
+            ${pill("Fouls/match", season.foulsPerMatch.toFixed(1))}
+            ${pill("Lopsided", season.lopsided)}
+          </div>
+          <p>${season.fair >= season.lopsided ? "Mostly balanced whistle so far." : "Has already produced multiple lopsided foul profiles."} ${season.yellows} yellows and ${season.reds} reds in cached tournament matches.</p>
+        </div>
         ${pitch(stats)}
       </section>
       <section class="side-panel">
@@ -275,10 +322,37 @@ function todayView(match, stats, game, discipline) {
       </section>
       <section class="side-panel">
         <h2>Suspension watch</h2>
-        <div class="player-list">${discipline.filter((p) => p.atRisk || p.red).slice(0, 8).map(playerItem).join("")}</div>
+        <div class="player-list">${risks.map(playerItem).join("") || "<p>No players from this match are marked at risk in the current cache.</p>"}</div>
       </section>
     </main>
   `;
+}
+
+function matchdayLabel() {
+  const now = new Date();
+  return `Current date: ${now.toLocaleDateString([], { month: "short", day: "numeric" })}`;
+}
+
+function sameLocalDay(match, date = new Date()) {
+  const d = new Date(match.datetime_mt);
+  return d.getFullYear() === date.getFullYear() && d.getMonth() === date.getMonth() && d.getDate() === date.getDate();
+}
+
+function sortedMatches() {
+  const now = Date.now();
+  let list = fixtures.slice();
+  if (state.sort === "today") {
+    const today = list.filter((match) => sameLocalDay(match));
+    list = today.length ? today : list.filter((match) => new Date(match.datetime_mt).getTime() >= now).slice(0, 8);
+  }
+  if (state.sort === "live") list = list.filter((match) => ["FT", "FT?"].includes(matchStatus(match)) || gameFor(match));
+  if (state.sort === "upcoming") list = list.filter((match) => new Date(match.datetime_mt).getTime() >= now);
+  list.sort((a, b) => {
+    if (state.sort === "cards") return statsFor(b).yellow_cards + statsFor(b).red_cards * 2 - (statsFor(a).yellow_cards + statsFor(a).red_cards * 2);
+    if (state.sort === "fouls") return statsFor(b).home_fouls + statsFor(b).away_fouls - (statsFor(a).home_fouls + statsFor(a).away_fouls);
+    return new Date(a.datetime_mt) - new Date(b.datetime_mt);
+  });
+  return list.slice(0, state.sort === "today" ? 16 : 28);
 }
 
 function fanRead(match, stats) {
@@ -346,6 +420,29 @@ function pitch(stats) {
   return `<div class="pitch"><div class="half home" style="width:${home}%"><b>${stats.home_fouls}</b><span>home fouls</span></div><div class="half away" style="width:${away}%"><b>${stats.away_fouls}</b><span>away fouls</span></div></div>`;
 }
 
+function matchCard(match) {
+  const game = gameFor(match);
+  const stats = statsFor(match);
+  const totalCards = stats.yellow_cards + stats.red_cards;
+  const totalFouls = stats.home_fouls + stats.away_fouls;
+  return `
+    <button class="match-card ${match.match_id === state.selectedMatchId ? "active" : ""}" data-match="${match.match_id}">
+      <div class="match-card-top"><span>${matchStatus(match)}</span><em>Group ${match.group}</em></div>
+      <div class="match-card-score">
+        ${team(match.home)}
+        <strong>${game ? `${game.home_score}-${game.away_score}` : "vs"}</strong>
+        ${team(match.away)}
+      </div>
+      <div class="match-card-ref"><b>${stats.referee}</b><span>${stats.referee_country}</span></div>
+      <div class="match-card-stats">
+        <span>${totalFouls} fouls</span>
+        <span>${totalCards} cards</span>
+        <span>${stats.var_reviews} VAR</span>
+      </div>
+    </button>
+  `;
+}
+
 function eventItem(event) {
   const card = event.card ? `<b class="${event.card}">${event.card === "red" ? "RED" : "YELLOW"}</b>` : "<b>FOUL</b>";
   return `<article class="event"><span>${event.minute}'</span>${card}<div><strong>${event.player_name}</strong><em>${event.team} · ${event.reason || event.type}</em></div></article>`;
@@ -378,6 +475,7 @@ function matchButton(match) {
 function bind() {
   app.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => { state.active = button.dataset.tab; render(); }));
   app.querySelectorAll("[data-match]").forEach((button) => button.addEventListener("click", () => { state.selectedMatchId = button.dataset.match; state.active = "today"; render(); }));
+  app.querySelector("[data-sort]")?.addEventListener("change", (event) => { state.sort = event.target.value; render(); });
   app.querySelector("[data-refresh]")?.addEventListener("click", refresh);
 }
 
