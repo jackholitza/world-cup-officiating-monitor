@@ -1,4 +1,4 @@
-export default { meta: { source: 'free-cache-overlay', updated_at: '2026-06-24T00:00:00Z', rows: 72 }, results: [
+export default { meta: { source: 'free-cache-overlay', note: 'Referee assignments/stat overlays are cache-shaped for live replacement from Reddit or scraped public match reports.' }, results: [
   {
     "match_id": "GA1",
     "home": "Mexico",

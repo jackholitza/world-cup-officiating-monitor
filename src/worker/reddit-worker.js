@@ -33,6 +33,8 @@ async function health(env) {
 }
 
 async function games(env) {
+  const live = await tryJson("https://wc26liveapi.jack-holitza.workers.dev/games");
+  if (live) return { ...live, meta: { ...(live.meta || {}), source: "wclive-worker", paid_tokens: false } };
   if (hasReddit(env)) {
     const reddit = await tryReddit(env, "wc_live_games");
     if (reddit) return reddit;
@@ -68,6 +70,16 @@ async function tryReddit(env, wikiPage) {
   try {
     return await fetchRedditJson(env, wikiPage);
   } catch (error) {
+    return null;
+  }
+}
+
+async function tryJson(url) {
+  try {
+    const res = await fetch(url, { headers: { accept: "application/json" } });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
     return null;
   }
 }
