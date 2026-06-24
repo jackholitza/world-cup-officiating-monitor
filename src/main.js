@@ -7,9 +7,13 @@ import referees from "./data/referees.js";
 
 const app = document.querySelector("#app");
 const DISCIPLINE_API = "https://world-cup-officiating-monitor-api.jack-holitza.workers.dev";
+const byTeam = new Map(teams.map((team) => [team.country, team]));
+const fixtureById = new Map(fixtures.map((match) => [match.match_id, match]));
+const playerById = new Map(players.map((player) => [player.player_id, player]));
+const refereeByName = new Map(referees.map((ref) => [ref.name, ref]));
 const state = {
   games: [],
-  stats: disciplineSeed.results,
+  stats: disciplineSeed.results.map(normalizeStats),
   active: "today",
   selectedMatchId: "GA1",
   selectedTeam: "Mexico",
@@ -17,11 +21,6 @@ const state = {
   status: "cache",
   updated: new Date()
 };
-
-const byTeam = new Map(teams.map((team) => [team.country, team]));
-const fixtureById = new Map(fixtures.map((match) => [match.match_id, match]));
-const playerById = new Map(players.map((player) => [player.player_id, player]));
-const refereeByName = new Map(referees.map((ref) => [ref.name, ref]));
 
 function canonicalTeam(value) {
   const raw = String(value || "").trim();
@@ -59,8 +58,9 @@ function normalizeGame(row) {
     api_id: row.id || row.match_id_api,
     home: match?.home || home,
     away: match?.away || away,
-    home_score: Number(row.home_score ?? row.home_goals ?? 0),
-    away_score: Number(row.away_score ?? row.away_goals ?? 0),
+    home_score: number(row.home_score ?? row.home_goals),
+    away_score: number(row.away_score ?? row.away_goals),
+    has_score: !["", null, undefined, "null"].includes(row.home_score ?? row.home_goals) && !["", null, undefined, "null"].includes(row.away_score ?? row.away_goals),
     finished,
     time_elapsed: finished ? "finished" : status || "scheduled",
     group: match?.group || row.group,
@@ -95,8 +95,14 @@ function normalizeStats(row) {
 }
 
 function number(value) {
+  if (value === null || value === undefined || value === "" || value === "null") return 0;
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function cleanNumber(value, digits = 0) {
+  const n = number(value);
+  return digits ? n.toFixed(digits) : String(Math.round(n));
 }
 
 function findFixture(home, away, id) {
@@ -120,6 +126,16 @@ function matchStatus(match) {
   const start = new Date(match.datetime_mt).getTime();
   if (Date.now() > start + 150 * 60000) return "FT?";
   return new Date(match.datetime_mt).toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function scoreText(game, fallback = "vs") {
+  if (!game || !game.has_score) return fallback;
+  return `${number(game.home_score)} - ${number(game.away_score)}`;
+}
+
+function compactScoreText(game, fallback = "vs") {
+  if (!game || !game.has_score) return fallback;
+  return `${number(game.home_score)}-${number(game.away_score)}`;
 }
 
 function allCardEvents() {
@@ -172,9 +188,9 @@ function refTable() {
     row.yellows += stat.yellow_cards;
     row.reds += stat.red_cards;
     row.fouls += stat.home_fouls + stat.away_fouls;
-    const gap = Math.abs(stat.home_fouls - stat.away_fouls);
-    if (gap >= 7) row.lopsided += 1;
-    if (gap <= 3 && stat.red_cards === 0) row.fair += 1;
+    const assessment = lopsidedAssessment(stat);
+    if (assessment.level !== "normal") row.lopsided += 1;
+    if (assessment.level === "normal" && stat.red_cards === 0) row.fair += 1;
     rows.set(stat.referee, row);
   }
   return [...rows.values()].sort((a, b) => b.matches - a.matches || b.yellows - a.yellows);
@@ -186,8 +202,9 @@ function refSeason(referee) {
     sum.yellows += stat.yellow_cards;
     sum.reds += stat.red_cards;
     sum.fouls += stat.home_fouls + stat.away_fouls;
-    sum.lopsided += Math.abs(stat.home_fouls - stat.away_fouls) >= 7 ? 1 : 0;
-    sum.fair += Math.abs(stat.home_fouls - stat.away_fouls) <= 3 && stat.red_cards === 0 ? 1 : 0;
+    const assessment = lopsidedAssessment(stat);
+    sum.lopsided += assessment.level !== "normal" ? 1 : 0;
+    sum.fair += assessment.level === "normal" && stat.red_cards === 0 ? 1 : 0;
     return sum;
   }, { yellows: 0, reds: 0, fouls: 0, lopsided: 0, fair: 0 });
   return {
@@ -200,6 +217,22 @@ function refSeason(referee) {
     cardsPerMatch: matches.length ? (totals.yellows + totals.reds) / matches.length : 0,
     foulsPerMatch: matches.length ? totals.fouls / matches.length : 0
   };
+}
+
+function lopsidedAssessment(stats) {
+  const home = number(stats.home_fouls);
+  const away = number(stats.away_fouls);
+  const total = home + away;
+  const gap = Math.abs(home - away);
+  const leader = home > away ? stats.home : away > home ? stats.away : "Neither side";
+  if (!total) {
+    return { home, away, total, gap, leader, noise80: 0, noise95: 0, level: "unknown", label: "No foul data", confidence: "unknown" };
+  }
+  const noise80 = Math.ceil(1.28 * Math.sqrt(total));
+  const noise95 = Math.ceil(1.96 * Math.sqrt(total));
+  if (gap > noise95) return { home, away, total, gap, leader, noise80, noise95, level: "clear", label: "Clearly lopsided", confidence: "high" };
+  if (gap > noise80) return { home, away, total, gap, leader, noise80, noise95, level: "lean", label: "Leans lopsided", confidence: "medium" };
+  return { home, away, total, gap, leader, noise80, noise95, level: "normal", label: "Within noise band", confidence: "low" };
 }
 
 function selectedMatch() {
@@ -266,6 +299,7 @@ function todayView(match, stats, game, discipline) {
   const cards = stats.card_events || [];
   const fouls = stats.foul_events || [];
   const risks = discipline.filter((player) => [match.home, match.away].includes(player.team) && (player.atRisk || player.red)).slice(0, 8);
+  const lop = lopsidedAssessment(stats);
   return `
     <main class="matchday">
       <section class="match-board">
@@ -285,7 +319,7 @@ function todayView(match, stats, game, discipline) {
         <div class="match-kicker">Group ${match.group} · ${match.venue} · ${matchStatus(match)}</div>
         <div class="scoreline">
           ${team(match.home)}
-          <strong>${game ? `${game.home_score} - ${game.away_score}` : "vs"}</strong>
+          <strong>${scoreText(game)}</strong>
           ${team(match.away)}
         </div>
         <div class="ref-card">
@@ -300,15 +334,19 @@ function todayView(match, stats, game, discipline) {
           ${pill("VAR", `${stats.var_reviews}`)}
         </div>
         <div class="fan-read">${fanRead(match, stats)}</div>
+        <div class="lopsided-card ${lop.level}">
+          <div><span>Lopsidedness</span><b>${lop.label}</b></div>
+          <p>${lop.leader} foul gap: ${lop.gap}. Expected noise band: ±${lop.noise80} medium, ±${lop.noise95} high confidence from ${lop.total} total fouls.</p>
+        </div>
         <div class="ref-season">
           <h2>${stats.referee}'s tournament</h2>
           <div class="stat-row">
             ${pill("Matches", season.matches)}
-            ${pill("Cards/match", season.cardsPerMatch.toFixed(1))}
-            ${pill("Fouls/match", season.foulsPerMatch.toFixed(1))}
+            ${pill("Cards/match", cleanNumber(season.cardsPerMatch, 1))}
+            ${pill("Fouls/match", cleanNumber(season.foulsPerMatch, 1))}
             ${pill("Lopsided", season.lopsided)}
           </div>
-          <p>${season.fair >= season.lopsided ? "Mostly balanced whistle so far." : "Has already produced multiple lopsided foul profiles."} ${season.yellows} yellows and ${season.reds} reds in cached tournament matches.</p>
+          <p>${season.fair >= season.lopsided ? "Mostly balanced whistle so far." : "Has already produced multiple lopsided foul profiles after accounting for the noise band."} ${season.yellows} yellows and ${season.reds} reds in cached tournament matches.</p>
         </div>
         ${pitch(stats)}
       </section>
@@ -356,11 +394,12 @@ function sortedMatches() {
 }
 
 function fanRead(match, stats) {
-  const gap = Math.abs(stats.home_fouls - stats.away_fouls);
-  if (gap >= 8) return `${stats.referee} has a lopsided whistle profile here: ${stats.home_fouls}-${stats.away_fouls} fouls. ${stats.home_fouls > stats.away_fouls ? match.home : match.away} are taking the heavier contact load.`;
+  const lop = lopsidedAssessment(stats);
+  if (lop.level === "clear") return `${stats.referee}'s foul count is clearly lopsided: ${stats.home_fouls}-${stats.away_fouls}. ${lop.leader} are outside the ±${lop.noise95} high-confidence noise band.`;
+  if (lop.level === "lean") return `${stats.referee}'s foul count leans lopsided: ${stats.home_fouls}-${stats.away_fouls}. ${lop.leader} are beyond the ±${lop.noise80} medium-confidence band, but not the ±${lop.noise95} high-confidence mark.`;
   if (stats.red_cards) return `This one has red-card danger. ${stats.red_cards} sending off is already in the cache, so the referee profile matters more than usual.`;
   if (stats.yellow_cards >= 6) return `Cards are the story: ${stats.yellow_cards} yellows logged. Watch second-yellow risk after halftime.`;
-  return `Pretty balanced so far: ${stats.home_fouls}-${stats.away_fouls} fouls, ${stats.yellow_cards} yellows, and no major imbalance in the cached report.`;
+  return `Balanced within margin: ${stats.home_fouls}-${stats.away_fouls} fouls, gap ${lop.gap} inside the ±${lop.noise80} medium-confidence noise band.`;
 }
 
 function playersView(discipline) {
@@ -387,7 +426,7 @@ function refsView() {
       </section>
       <section class="board">
         <h2>Lopsided Whistles</h2>
-        <div class="table-list">${state.stats.filter((s) => Math.abs(s.home_fouls - s.away_fouls) >= 7).slice(0, 20).map(lopsidedItem).join("")}</div>
+        <div class="table-list">${state.stats.filter((s) => lopsidedAssessment(s).level !== "normal").slice(0, 20).map(lopsidedItem).join("") || "<p>No match is outside the current foul-noise band.</p>"}</div>
       </section>
     </main>
   `;
@@ -415,8 +454,8 @@ function pill(label, value) {
 
 function pitch(stats) {
   const total = Math.max(1, stats.home_fouls + stats.away_fouls);
-  const home = Math.max(12, (stats.home_fouls / total) * 78);
-  const away = Math.max(12, (stats.away_fouls / total) * 78);
+  const home = Math.max(12, (number(stats.home_fouls) / total) * 78);
+  const away = Math.max(12, (number(stats.away_fouls) / total) * 78);
   return `<div class="pitch"><div class="half home" style="width:${home}%"><b>${stats.home_fouls}</b><span>home fouls</span></div><div class="half away" style="width:${away}%"><b>${stats.away_fouls}</b><span>away fouls</span></div></div>`;
 }
 
@@ -430,7 +469,7 @@ function matchCard(match) {
       <div class="match-card-top"><span>${matchStatus(match)}</span><em>Group ${match.group}</em></div>
       <div class="match-card-score">
         ${team(match.home)}
-        <strong>${game ? `${game.home_score}-${game.away_score}` : "vs"}</strong>
+        <strong>${compactScoreText(game)}</strong>
         ${team(match.away)}
       </div>
       <div class="match-card-ref"><b>${stats.referee}</b><span>${stats.referee_country}</span></div>
@@ -455,11 +494,12 @@ function playerItem(player) {
 
 function refItem(ref) {
   const tone = ref.lopsided > ref.fair ? "warning" : "good";
-  return `<article class="row-card ${tone}"><div><b>${ref.name}</b><span>${ref.country}</span></div><strong>${ref.matches} matches</strong><em>${ref.yellows}Y ${ref.reds}R · ${ref.lopsided} lopsided</em></article>`;
+  return `<article class="row-card ${tone}"><div><b>${ref.name}</b><span>${ref.country}</span></div><strong>${ref.matches} matches</strong><em>${ref.yellows}Y ${ref.reds}R · ${ref.lopsided} outside band</em></article>`;
 }
 
 function lopsidedItem(stats) {
-  return `<button class="row-card warning" data-match="${stats.match_id}"><div><b>${stats.home} vs ${stats.away}</b><span>${stats.referee} · ${stats.referee_country}</span></div><strong>${stats.home_fouls}-${stats.away_fouls}</strong><em>fouls</em></button>`;
+  const lop = lopsidedAssessment(stats);
+  return `<button class="row-card warning" data-match="${stats.match_id}"><div><b>${stats.home} vs ${stats.away}</b><span>${stats.referee} · ${stats.referee_country}</span></div><strong>${stats.home_fouls}-${stats.away_fouls}</strong><em>gap ${lop.gap}, band ±${lop.noise80}/±${lop.noise95}</em></button>`;
 }
 
 function teamItem(row) {
@@ -469,7 +509,7 @@ function teamItem(row) {
 function matchButton(match) {
   const game = gameFor(match);
   const stats = statsFor(match);
-  return `<button class="match-button ${match.match_id === state.selectedMatchId ? "active" : ""}" data-match="${match.match_id}"><span>${matchStatus(match)}</span><b>${match.home} ${game ? game.home_score : ""} - ${game ? game.away_score : ""} ${match.away}</b><em>${stats.referee}</em></button>`;
+  return `<button class="match-button ${match.match_id === state.selectedMatchId ? "active" : ""}" data-match="${match.match_id}"><span>${matchStatus(match)}</span><b>${match.home} ${scoreText(game, "-")} ${match.away}</b><em>${stats.referee}</em></button>`;
 }
 
 function bind() {

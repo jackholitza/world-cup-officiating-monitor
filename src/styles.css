@@ -228,6 +228,30 @@ h1, h2, p { margin: 0; }
   color: #f8e9b6;
   line-height: 1.5;
 }
+.lopsided-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel2);
+  padding: 12px;
+}
+.lopsided-card div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.lopsided-card span {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.lopsided-card p {
+  color: var(--muted);
+  line-height: 1.45;
+}
+.lopsided-card.lean { border-color: rgba(240, 200, 87, .55); }
+.lopsided-card.clear { border-color: rgba(255, 103, 103, .6); }
 .ref-season {
   display: grid;
   gap: 10px;
