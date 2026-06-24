@@ -12,42 +12,105 @@ export default {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return json({}, 204);
     if (url.pathname === "/health") return health(env);
+    if (url.pathname === "/refresh") return json(await refreshCache(env));
     if (url.pathname === "/games") return json(await games(env));
     if (url.pathname === "/match-stats") return json(await matchStats(env));
     if (url.pathname === "/") return json({
       name: "world-cup-officiating-monitor-api",
-      plan: "free static-first worker",
-      endpoints: ["/health", "/games", "/match-stats"]
+      plan: "free scheduled cache worker",
+      endpoints: ["/health", "/refresh", "/games", "/match-stats"]
     });
     return json({ error: "not found" }, 404);
+  },
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(refreshCache(env));
   }
 };
 
 async function health(env) {
+  const cachedGames = await readCache(env, "games");
+  const cachedStats = await readCache(env, "match-stats");
   return json({
     ok: true,
-    mode: hasReddit(env) ? "reddit-plus-static-fallback" : "static-free-cache",
+    mode: hasReddit(env) ? "reddit-plus-scheduled-cache" : "scheduled-free-cache",
+    cache: {
+      games_updated_at: cachedGames?.meta?.cached_at || null,
+      stats_updated_at: cachedStats?.meta?.cached_at || null,
+      kv_enabled: Boolean(env.MATCH_CACHE)
+    },
     paid_tokens: false,
     updated: new Date().toISOString()
   });
 }
 
 async function games(env) {
-  const live = await tryJson("https://wc26liveapi.jack-holitza.workers.dev/games");
-  if (live) return { ...live, meta: { ...(live.meta || {}), source: "wclive-worker", paid_tokens: false } };
-  if (hasReddit(env)) {
-    const reddit = await tryReddit(env, "wc_live_games");
-    if (reddit) return reddit;
-  }
+  const cached = await readCache(env, "games");
+  if (cached) return cached;
+  const live = await fetchGames(env);
+  if (live) return live;
   return annotate(gamesSeed, "free-static-worker-cache");
 }
 
 async function matchStats(env) {
+  const cached = await readCache(env, "match-stats");
+  if (cached) return cached;
+  const liveStats = await fetchMatchStats(env);
+  if (liveStats) return liveStats;
+  return annotate(matchStatsSeed, "free-static-worker-cache");
+}
+
+async function refreshCache(env) {
+  const [nextGames, nextStats] = await Promise.all([fetchGames(env), fetchMatchStats(env)]);
+  const wrote = {};
+  wrote.games = await writeCache(env, "games", nextGames || annotate(gamesSeed, "wclive-seed-cache"));
+  if (nextStats) wrote.match_stats = await writeCache(env, "match-stats", nextStats);
+  return {
+    ok: Boolean(nextGames || nextStats),
+    wrote,
+    paid_tokens: false,
+    refreshed_at: new Date().toISOString()
+  };
+}
+
+async function fetchGames(env) {
+  const live = await tryJson("https://wc26liveapi.jack-holitza.workers.dev/games");
+  if (live) return annotate(live, "wclive-worker");
+  if (hasReddit(env)) {
+    const reddit = await tryReddit(env, "wc_live_games");
+    if (reddit) return annotate(reddit, "reddit-oauth-free");
+  }
+  return null;
+}
+
+async function fetchMatchStats(env) {
+  if (env.DISCIPLINE_JSON_URL) {
+    const publicJson = await tryJson(env.DISCIPLINE_JSON_URL);
+    if (publicJson) return annotate(publicJson, "public-json-feed");
+  }
   if (hasReddit(env)) {
     const reddit = await tryReddit(env, "wc_match_stats");
-    if (reddit) return reddit;
+    if (reddit) return annotate(reddit, "reddit-oauth-free");
   }
   return annotate(matchStatsSeed, "free-static-worker-cache");
+}
+
+async function readCache(env, key) {
+  if (!env.MATCH_CACHE) return null;
+  try {
+    return await env.MATCH_CACHE.get(key, "json");
+  } catch {
+    return null;
+  }
+}
+
+async function writeCache(env, key, payload) {
+  if (!env.MATCH_CACHE) return false;
+  try {
+    await env.MATCH_CACHE.put(key, JSON.stringify({ ...payload, meta: { ...(payload.meta || {}), cached_at: new Date().toISOString() } }));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function annotate(payload, source) {

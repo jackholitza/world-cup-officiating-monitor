@@ -5,3 +5,10 @@ workers_dev = true
 
 [vars]
 REDDIT_SUBREDDIT = "worldcup"
+
+[[kv_namespaces]]
+binding = "MATCH_CACHE"
+id = "5e58ecda27654be488fcab5631545eed"
+
+[triggers]
+crons = ["*/5 * * * *"]
