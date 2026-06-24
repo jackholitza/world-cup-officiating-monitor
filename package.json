@@ -1,0 +1,10 @@
+{
+  "name": "world-cup-officiating-monitor",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "python3 -m http.server 5173",
+    "serve": "python3 -m http.server 5173"
+  }
+}

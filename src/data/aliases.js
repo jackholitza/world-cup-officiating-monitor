@@ -1,0 +1,23 @@
+export default {
+  "United States of America": "United States",
+  "USA": "United States",
+  "USMNT": "United States",
+  "IR Iran": "Iran",
+  "Iran": "Iran",
+  "Czech Republic": "Czechia",
+  "Czechia": "Czechia",
+  "Turkey": "Turkiye",
+  "Türkiye": "Turkiye",
+  "Turkiye": "Turkiye",
+  "Cabo Verde": "Cape Verde",
+  "Cape Verde": "Cape Verde",
+  "Korea Republic": "South Korea",
+  "South Korea": "South Korea",
+  "DR Congo": "DR Congo",
+  "Democratic Republic of the Congo": "DR Congo",
+  "Congo DR": "DR Congo",
+  "Curacao": "Curaçao",
+  "Curaçao": "Curaçao",
+  "Bosnia": "Bosnia and Herzegovina",
+  "Bosnia & Herzegovina": "Bosnia and Herzegovina"
+};
