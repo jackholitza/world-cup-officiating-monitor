@@ -7,6 +7,10 @@ import historical from "./data/officiatingHistorical.js";
 
 const app = document.querySelector("#app");
 const API_BASE = location.hostname.includes("localhost") || location.hostname.includes("127.0.0.1") ? "/api" : "https://wc26-officiating-api.example.workers.dev";
+const byTeam = new Map(teams.map((team) => [team.country, team]));
+const strengthByTeam = new Map(strengths.map((team) => [team.country, team]));
+const fixtureById = new Map(fixtures.map((match) => [match.match_id, match]));
+const groups = [...new Set(teams.map((team) => team.group))].sort((a, b) => a.localeCompare(b));
 const state = {
   liveResults: normalizePayload(liveSeed),
   matchStats: [],
@@ -17,11 +21,6 @@ const state = {
   focusTeam: "United States",
   includeLiveInTable: true
 };
-
-const byTeam = new Map(teams.map((team) => [team.country, team]));
-const strengthByTeam = new Map(strengths.map((team) => [team.country, team]));
-const fixtureById = new Map(fixtures.map((match) => [match.match_id, match]));
-const groups = [...new Set(teams.map((team) => team.group))].sort((a, b) => a.localeCompare(b));
 
 function canonicalTeam(value) {
   const raw = String(value || "").trim();
@@ -423,6 +422,7 @@ function dashboardView(tables, bracket, match, signal) {
           ${metric("VAR", `${signal.stats.var_reviews} reviews`, `${signal.stats.penalties} penalties`)}
         </div>
         <div class="reason-list">${signal.reasons.map((item) => `<span>${item}</span>`).join("")}</div>
+        ${pitchVisual(match, signal)}
       </section>
       <section class="panel">
         <div class="panel-head"><h2>Live Group Table</h2><label><input type="checkbox" data-action="toggle-live" ${state.includeLiveInTable ? "checked" : ""}> include live scores</label></div>
@@ -509,6 +509,32 @@ function pipelineView() {
         <pre>${escapeHtml(JSON.stringify({ games: state.liveResults.slice(0, 8), matchStats: state.matchStats.slice(0, 8), status: state.apiStatus }, null, 2))}</pre>
       </section>
     </main>
+  `;
+}
+
+function pitchVisual(match, signal) {
+  const homeRisk = teamRisk(match.home);
+  const awayRisk = teamRisk(match.away);
+  const homeFoulX = 24 + homeRisk.foul_pressure * 18;
+  const awayFoulX = 76 - awayRisk.foul_pressure * 18;
+  const cardY = 28 + signal.risk * 36;
+  return `
+    <div class="pitch-card" aria-label="Officiating pressure map">
+      <svg viewBox="0 0 100 58" role="img">
+        <rect x="1" y="1" width="98" height="56" rx="3"></rect>
+        <line x1="50" y1="1" x2="50" y2="57"></line>
+        <circle cx="50" cy="29" r="8"></circle>
+        <rect x="1" y="14" width="15" height="30"></rect>
+        <rect x="84" y="14" width="15" height="30"></rect>
+        <circle class="zone home" cx="${homeFoulX.toFixed(1)}" cy="29" r="${(7 + homeRisk.card_risk * 8).toFixed(1)}"></circle>
+        <circle class="zone away" cx="${awayFoulX.toFixed(1)}" cy="29" r="${(7 + awayRisk.card_risk * 8).toFixed(1)}"></circle>
+        <circle class="zone cards" cx="50" cy="${cardY.toFixed(1)}" r="${(5 + signal.risk * 10).toFixed(1)}"></circle>
+      </svg>
+      <div>
+        <b>Pressure Map</b>
+        <span>${match.home} foul load ${fmtNumber(homeRisk.foul_pressure)} · ${match.away} foul load ${fmtNumber(awayRisk.foul_pressure)}</span>
+      </div>
+    </div>
   `;
 }
 
