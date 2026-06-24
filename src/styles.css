@@ -80,6 +80,22 @@ h3 { font-size: 14px; color: var(--muted); }
   gap: 16px;
   padding: 0 clamp(16px, 4vw, 42px) 42px;
 }
+.fallback-shell {
+  display: grid;
+  min-height: calc(100vh - 110px);
+  align-items: center;
+  padding: clamp(16px, 4vw, 42px);
+}
+.fallback-shell .scoreboard {
+  max-width: 980px;
+  width: 100%;
+  margin: 0 auto;
+}
+.fallback-copy {
+  color: var(--muted);
+  line-height: 1.6;
+  max-width: 720px;
+}
 .wide {
   display: grid;
   gap: 16px;

@@ -6,7 +6,7 @@ import liveSeed from "./data/liveSeed.js";
 import historical from "./data/officiatingHistorical.js";
 
 const app = document.querySelector("#app");
-const API_BASE = location.hostname.includes("localhost") || location.hostname.includes("127.0.0.1") ? "/api" : "https://wc26-officiating-api.example.workers.dev";
+const API_BASE = location.hostname.includes("localhost") || location.hostname.includes("127.0.0.1") ? "/api" : "";
 const byTeam = new Map(teams.map((team) => [team.country, team]));
 const strengthByTeam = new Map(strengths.map((team) => [team.country, team]));
 const fixtureById = new Map(fixtures.map((match) => [match.match_id, match]));
@@ -329,6 +329,12 @@ function matchStakes(match) {
 }
 
 async function refreshLive() {
+  if (!API_BASE) {
+    state.apiStatus = "static cache";
+    state.lastRefresh = new Date();
+    render();
+    return;
+  }
   try {
     const [gamesRes, statsRes] = await Promise.all([
       fetch(`${API_BASE}/games`, { cache: "no-store" }),
@@ -366,31 +372,45 @@ async function refreshLive() {
 }
 
 function render() {
-  const tables = computeTables();
-  const bracket = buildBracket(tables);
-  const focusMatch = fixtureById.get(state.focusMatchId) || fixtures[0];
-  const selectedSignal = signalFor(focusMatch);
-  app.innerHTML = `
-    <header class="app-header">
-      <div>
-        <span class="eyebrow">World Cup data lab</span>
-        <h1>Officiating Monitor</h1>
-      </div>
-      <div class="status-pill"><b>${state.apiStatus}</b><span>${state.lastRefresh.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span></div>
-      <button class="icon-button" data-action="refresh" title="Refresh live cache">↻</button>
-    </header>
-    <nav class="tabs">
-      ${tabButton("dashboard", "Match Lab")}
-      ${tabButton("signals", "Signals")}
-      ${tabButton("bracket", "Bracket")}
-      ${tabButton("pipeline", "Pipeline")}
-    </nav>
-    ${state.activeView === "dashboard" ? dashboardView(tables, bracket, focusMatch, selectedSignal) : ""}
-    ${state.activeView === "signals" ? signalsView() : ""}
-    ${state.activeView === "bracket" ? bracketView(tables, bracket) : ""}
-    ${state.activeView === "pipeline" ? pipelineView() : ""}
-  `;
-  bindEvents();
+  try {
+    const tables = computeTables();
+    const bracket = buildBracket(tables);
+    const focusMatch = fixtureById.get(state.focusMatchId) || fixtures[0];
+    const selectedSignal = signalFor(focusMatch);
+    app.innerHTML = `
+      <header class="app-header">
+        <div>
+          <span class="eyebrow">World Cup data lab</span>
+          <h1>Officiating Monitor</h1>
+        </div>
+        <div class="status-pill"><b>${state.apiStatus}</b><span>${state.lastRefresh.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span></div>
+        <button class="icon-button" data-action="refresh" title="Refresh live cache">↻</button>
+      </header>
+      <nav class="tabs">
+        ${tabButton("dashboard", "Match Lab")}
+        ${tabButton("signals", "Signals")}
+        ${tabButton("bracket", "Bracket")}
+        ${tabButton("pipeline", "Pipeline")}
+      </nav>
+      ${state.activeView === "dashboard" ? dashboardView(tables, bracket, focusMatch, selectedSignal) : ""}
+      ${state.activeView === "signals" ? signalsView() : ""}
+      ${state.activeView === "bracket" ? bracketView(tables, bracket) : ""}
+      ${state.activeView === "pipeline" ? pipelineView() : ""}
+    `;
+    bindEvents();
+  } catch (error) {
+    app.innerHTML = `
+      <main class="fallback-shell">
+        <section class="scoreboard">
+          <div class="match-meta">Runtime diagnostic</div>
+          <h1>Officiating Monitor</h1>
+          <div class="signal-band poor"><b>APP ERROR</b><span>${escapeHtml(error.message || String(error))}</span></div>
+          <p class="fallback-copy">The static assets loaded, but one dashboard module failed while rendering. The cache is intact; this panel is here so the site never goes black.</p>
+        </section>
+      </main>
+    `;
+    throw error;
+  }
 }
 
 function tabButton(id, label) {

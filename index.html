@@ -7,7 +7,37 @@
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
-    <div id="app"></div>
-    <script type="module" src="./src/main.js"></script>
+    <div id="app">
+      <header class="app-header fallback-header">
+        <div>
+          <span class="eyebrow">World Cup data lab</span>
+          <h1>Officiating Monitor</h1>
+        </div>
+        <div class="status-pill"><b>loading</b><span>cache-first site</span></div>
+      </header>
+      <main class="fallback-shell">
+        <section class="scoreboard">
+          <div class="match-meta">Static fallback</div>
+          <div class="scoreline">
+            <span class="team"><span>🏟️</span>World Cup</span>
+            <strong>vs</strong>
+            <span class="team"><span>🟨</span>Officials</span>
+          </div>
+          <div class="signal-band watch">
+            <b>LOADING</b>
+            <span>Historical officiating cache is starting up</span>
+          </div>
+          <p class="fallback-copy">If this stays visible, refresh once. The dashboard is built to run from cached files and does not require a paid API token.</p>
+        </section>
+      </main>
+    </div>
+    <script>
+      window.addEventListener("error", function (event) {
+        var app = document.getElementById("app");
+        if (!app) return;
+        app.innerHTML = '<main class="fallback-shell"><section class="scoreboard"><div class="match-meta">Runtime diagnostic</div><h1>Officiating Monitor</h1><div class="signal-band poor"><b>APP ERROR</b><span>' + String(event.message || "Unknown JavaScript error") + '</span></div><p class="fallback-copy">The static page loaded, but the dashboard script failed. The source cache is still available in the repository.</p></section></main>';
+      });
+    </script>
+    <script type="module" src="./src/main.js?v=20260624b"></script>
   </body>
 </html>
