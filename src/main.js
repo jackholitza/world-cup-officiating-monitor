@@ -202,21 +202,76 @@ function refSeason(referee) {
     sum.yellows += stat.yellow_cards;
     sum.reds += stat.red_cards;
     sum.fouls += stat.home_fouls + stat.away_fouls;
+    sum.pens += stat.penalties;
+    sum.varReviews += stat.var_reviews;
     const assessment = lopsidedAssessment(stat);
     sum.lopsided += assessment.level !== "normal" ? 1 : 0;
     sum.fair += assessment.level === "normal" && stat.red_cards === 0 ? 1 : 0;
     return sum;
-  }, { yellows: 0, reds: 0, fouls: 0, lopsided: 0, fair: 0 });
+  }, { yellows: 0, reds: 0, fouls: 0, pens: 0, varReviews: 0, lopsided: 0, fair: 0 });
   return {
     matches: matches.length,
+    matchesList: matches,
     yellows: totals.yellows,
     reds: totals.reds,
     fouls: totals.fouls,
+    pens: totals.pens,
+    varReviews: totals.varReviews,
     lopsided: totals.lopsided,
     fair: totals.fair,
     cardsPerMatch: matches.length ? (totals.yellows + totals.reds) / matches.length : 0,
-    foulsPerMatch: matches.length ? totals.fouls / matches.length : 0
+    foulsPerMatch: matches.length ? totals.fouls / matches.length : 0,
+    pensPerMatch: matches.length ? totals.pens / matches.length : 0,
+    varPerMatch: matches.length ? totals.varReviews / matches.length : 0
   };
+}
+
+function teamDirtyProfile(teamName) {
+  const table = teamDiscipline();
+  const row = table.find((team) => team.team === teamName) || { team: teamName, yellows: 0, reds: 0, fouls: 0, atRisk: 0 };
+  const score = row.fouls + row.yellows * 3 + row.reds * 7 + row.atRisk * 2;
+  const ranked = table.map((team) => ({ ...team, score: team.fouls + team.yellows * 3 + team.reds * 7 + team.atRisk * 2 })).sort((a, b) => b.score - a.score);
+  const rank = Math.max(1, ranked.findIndex((team) => team.team === teamName) + 1);
+  let label = "quiet";
+  if (rank <= 8 || score >= 24) label = "dirty";
+  else if (rank <= 18 || score >= 14) label = "chippy";
+  return { ...row, score, rank, label };
+}
+
+function refMatchupRead(match, stats, season) {
+  const home = teamDirtyProfile(match.home);
+  const away = teamDirtyProfile(match.away);
+  const dirtier = home.score >= away.score ? home : away;
+  const penLine = season.pensPerMatch >= 0.35 ? "This ref is penalty-friendly in the cache" : "This ref has not been penalty-heavy in the cache";
+  const foulLine = season.foulsPerMatch >= 28 ? "and usually lets the foul count climb." : "and usually keeps the foul count contained.";
+  return `${penLine} at ${cleanNumber(season.pensPerMatch, 2)} pens per match ${foulLine} ${dirtier.team} rate as the dirtier side (${dirtier.label}, rank ${dirtier.rank}), so compare any foul gap against that team tendency before blaming the whistle.`;
+}
+
+function refHistoryList(stats, season) {
+  return season.matchesList
+    .filter((matchStats) => matchStats.match_id !== stats.match_id)
+    .slice(0, 4)
+    .map((matchStats) => {
+      const cards = matchStats.yellow_cards + matchStats.red_cards;
+      return `<article class="mini-game"><b>${matchStats.home} vs ${matchStats.away}</b><span>${matchStats.home_fouls}-${matchStats.away_fouls} fouls</span><em>${matchStats.var_reviews} VAR · ${matchStats.penalties} pens · ${cards} cards</em></article>`;
+    })
+    .join("") || `<p class="empty-note">No earlier cached matches for this ref yet.</p>`;
+}
+
+function outcomePrompts(match, stats, season) {
+  const home = teamDirtyProfile(match.home);
+  const away = teamDirtyProfile(match.away);
+  const dirtier = home.score >= away.score ? home : away;
+  const quieter = home.score >= away.score ? away : home;
+  const lop = lopsidedAssessment(stats);
+  const leader = lop.leader === "Neither side" ? dirtier.team : lop.leader;
+  return [
+    `If ${dirtier.team} gets an early yellow, say: their normal discipline profile is already hot, so one more reckless foul could flip this from pressure to suspension risk.`,
+    `If ${quieter.team} starts losing the foul count, say: that is more interesting than raw totals because they entered as the cleaner side in the cache.`,
+    `If a penalty is given, say: ${stats.referee} is now tracking against a ${cleanNumber(season.pensPerMatch, 2)} pens-per-game baseline, so the next VAR review matters.`,
+    `If the foul gap reaches ${lop.noise80 + 1} or more, say: ${leader} are outside the medium noise band and the match is no longer just normal contact.`,
+    `If ${stats.referee} reaches ${Math.max(5, Math.ceil(season.cardsPerMatch + 2))} cards, say: the game is running above this ref's card baseline and second-yellow management becomes the story.`
+  ];
 }
 
 function lopsidedAssessment(stats) {
@@ -289,7 +344,7 @@ function render() {
 }
 
 function tab(id, label) {
-  return `<button class="${state.active === id ? "active" : ""}" data-tab="${id}">${label}</button>`;
+  return `<button class="tab-${id} ${state.active === id ? "active" : ""}" data-tab="${id}">${label}</button>`;
 }
 
 function todayView(match, stats, game, discipline) {
@@ -342,11 +397,19 @@ function todayView(match, stats, game, discipline) {
           <h2>${stats.referee}'s tournament</h2>
           <div class="stat-row">
             ${pill("Matches", season.matches)}
-            ${pill("Cards/match", cleanNumber(season.cardsPerMatch, 1))}
-            ${pill("Fouls/match", cleanNumber(season.foulsPerMatch, 1))}
-            ${pill("Lopsided", season.lopsided)}
+            ${pill("Pens/game", cleanNumber(season.pensPerMatch, 2))}
+            ${pill("Fouls/game", cleanNumber(season.foulsPerMatch, 1))}
+            ${pill("VAR/game", cleanNumber(season.varPerMatch, 2))}
           </div>
-          <p>${season.fair >= season.lopsided ? "Mostly balanced whistle so far." : "Has already produced multiple lopsided foul profiles after accounting for the noise band."} ${season.yellows} yellows and ${season.reds} reds in cached tournament matches.</p>
+          <p>${refMatchupRead(match, stats, season)}</p>
+          <div class="ref-games">
+            <h3>Other games</h3>
+            ${refHistoryList(stats, season)}
+          </div>
+        </div>
+        <div class="prompt-board">
+          <h2>Whiteboard reads</h2>
+          <div class="prompt-list">${outcomePrompts(match, stats, season).map((prompt) => `<p>${prompt}</p>`).join("")}</div>
         </div>
         ${pitch(stats)}
       </section>
