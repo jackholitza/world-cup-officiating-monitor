@@ -458,11 +458,11 @@ function sortedMatches() {
 
 function fanRead(match, stats) {
   const lop = lopsidedAssessment(stats);
-  if (lop.level === "clear") return `${stats.referee}'s foul count is clearly lopsided: ${stats.home_fouls}-${stats.away_fouls}. ${lop.leader} are outside the ±${lop.noise95} high-confidence noise band.`;
-  if (lop.level === "lean") return `${stats.referee}'s foul count leans lopsided: ${stats.home_fouls}-${stats.away_fouls}. ${lop.leader} are beyond the ±${lop.noise80} medium-confidence band, but not the ±${lop.noise95} high-confidence mark.`;
-  if (stats.red_cards) return `This one has red-card danger. ${stats.red_cards} sending off is already in the cache, so the referee profile matters more than usual.`;
-  if (stats.yellow_cards >= 6) return `Cards are the story: ${stats.yellow_cards} yellows logged. Watch second-yellow risk after halftime.`;
-  return `Balanced within margin: ${stats.home_fouls}-${stats.away_fouls} fouls, gap ${lop.gap} inside the ±${lop.noise80} medium-confidence noise band.`;
+  if (lop.level === "clear") return `${stats.referee} is calling this one heavily against ${lop.leader}. At ${stats.home_fouls}-${stats.away_fouls} fouls, that gap is big enough to feel like a real match story, not just normal chaos.`;
+  if (lop.level === "lean") return `${stats.referee}'s whistle is starting to tilt toward ${lop.leader}. It is not a full-blown controversy yet, but the ${stats.home_fouls}-${stats.away_fouls} foul count is worth watching.`;
+  if (stats.red_cards) return `This match already has a sending off, so the mood is different now. Every late tackle, protest, and crowded challenge is going to feel a little more dangerous.`;
+  if (stats.yellow_cards >= 6) return `The referee has gone to the pocket a lot today: ${stats.yellow_cards} yellows so far. One clumsy challenge could turn someone's night from tense to finished.`;
+  return `This still feels fairly even. The foul count is ${stats.home_fouls}-${stats.away_fouls}, close enough that the referee has not become the main character yet.`;
 }
 
 function playersView(discipline) {
