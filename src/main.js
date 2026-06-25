@@ -120,6 +120,35 @@ function statsFor(match) {
   return state.stats.find((row) => row.match_id === match.match_id) || normalizeStats({ match_id: match.match_id, home: match.home, away: match.away });
 }
 
+function matchForStat(stat) {
+  return fixtureById.get(stat.match_id) || findFixture(stat.home, stat.away, stat.match_id);
+}
+
+function isPlayedMatch(match) {
+  const game = gameFor(match);
+  if (game) return game.finished || game.has_score || !["scheduled", "notstarted", ""].includes(game.time_elapsed);
+  return new Date(match.datetime_mt).getTime() <= Date.now();
+}
+
+function isPlayedStat(stat) {
+  const match = matchForStat(stat);
+  return match ? isPlayedMatch(match) : false;
+}
+
+function playedStats() {
+  return state.stats.filter(isPlayedStat);
+}
+
+function statQuality(stats) {
+  const source = String(stats.source || "").toLowerCase();
+  const confidence = String(stats.confidence || "").toLowerCase();
+  const played = isPlayedStat(stats);
+  const modeled = source.includes("free-cache") || source.includes("seed") || confidence.includes("seed");
+  if (!played) return { label: "Projected", detail: "pre-match estimate, not a final stat sheet", tone: "projected" };
+  if (modeled) return { label: "Modeled", detail: "score is live; foul/card detail still needs a verified stat feed", tone: "modeled" };
+  return { label: "Verified", detail: "stat feed connected", tone: "verified" };
+}
+
 function matchStatus(match) {
   const game = gameFor(match);
   if (game?.finished) return "FT";
@@ -139,12 +168,14 @@ function compactScoreText(game, fallback = "vs") {
   return `${number(game.home_score)}-${number(game.away_score)}`;
 }
 
-function allCardEvents() {
-  return state.stats.flatMap((row) => (row.card_events || []).map((event) => ({ ...event, match: fixtureById.get(row.match_id), stats: row })));
+function allCardEvents(options = {}) {
+  const rows = options.playedOnly === false ? state.stats : playedStats();
+  return rows.flatMap((row) => (row.card_events || []).map((event) => ({ ...event, match: fixtureById.get(row.match_id), stats: row })));
 }
 
-function allFoulEvents() {
-  return state.stats.flatMap((row) => (row.foul_events || []).map((event) => ({ ...event, match: fixtureById.get(row.match_id), stats: row })));
+function allFoulEvents(options = {}) {
+  const rows = options.playedOnly === false ? state.stats : playedStats();
+  return rows.flatMap((row) => (row.foul_events || []).map((event) => ({ ...event, match: fixtureById.get(row.match_id), stats: row })));
 }
 
 function playerDiscipline() {
@@ -168,9 +199,10 @@ function playerDiscipline() {
 }
 
 function teamDiscipline() {
+  const rows = playedStats();
   return teams.map((team) => {
     const cards = allCardEvents().filter((event) => event.team === team.country);
-    const matchRows = state.stats.filter((stat) => stat.home === team.country || stat.away === team.country);
+    const matchRows = rows.filter((stat) => stat.home === team.country || stat.away === team.country);
     const fouls = matchRows.reduce((sum, stat) => sum + (stat.home === team.country ? stat.home_fouls : stat.away_fouls), 0);
     return {
       team: team.country,
@@ -186,7 +218,7 @@ function teamDiscipline() {
 
 function refTable() {
   const rows = new Map();
-  for (const stat of state.stats) {
+  for (const stat of playedStats()) {
     const row = rows.get(stat.referee) || { name: stat.referee, country: stat.referee_country, matches: 0, yellows: 0, reds: 0, fouls: 0, lopsided: 0, fair: 0 };
     row.matches += 1;
     row.yellows += stat.yellow_cards;
@@ -201,7 +233,7 @@ function refTable() {
 }
 
 function refSeason(referee) {
-  const matches = state.stats.filter((stat) => stat.referee === referee);
+  const matches = playedStats().filter((stat) => stat.referee === referee);
   const totals = matches.reduce((sum, stat) => {
     sum.yellows += stat.yellow_cards;
     sum.reds += stat.red_cards;
@@ -246,9 +278,10 @@ function refMatchupRead(match, stats, season) {
   const home = teamDirtyProfile(match.home);
   const away = teamDirtyProfile(match.away);
   const dirtier = home.score >= away.score ? home : away;
-  const penLine = season.pensPerMatch >= 0.35 ? "This ref is penalty-friendly in the cache" : "This ref has not been penalty-heavy in the cache";
-  const foulLine = season.foulsPerMatch >= 28 ? "and usually lets the foul count climb." : "and usually keeps the foul count contained.";
-  return `${penLine} at ${cleanNumber(season.pensPerMatch, 2)} pens per match ${foulLine} ${dirtier.team} rate as the dirtier side (${dirtier.label}, rank ${dirtier.rank}), so compare any foul gap against that team tendency before blaming the whistle.`;
+  if (!season.matches) return `No played-match sample for this referee yet, so treat this as a watchlist rather than a settled profile. ${dirtier.team} are the team more likely to make the whistle feel busy once the match starts.`;
+  const penLine = season.pensPerMatch >= 0.35 ? "This ref has pointed to the spot more often than most in the played sample" : "This ref has not been penalty-heavy in the played sample";
+  const foulLine = season.foulsPerMatch >= 28 ? "and their games have tended to get scrappy." : "and their games have mostly stayed manageable.";
+  return `${penLine} at ${cleanNumber(season.pensPerMatch, 2)} pens per match ${foulLine} ${dirtier.team} rate as the more combustible side (${dirtier.label}, rank ${dirtier.rank}), so judge any foul gap against how they usually play.`;
 }
 
 function refHistoryList(stats, season) {
@@ -367,6 +400,7 @@ function todayView(match, stats, game, discipline) {
   const fouls = stats.foul_events || [];
   const risks = discipline.filter((player) => [match.home, match.away].includes(player.team) && (player.atRisk || player.red)).slice(0, 8);
   const lop = lopsidedAssessment(stats);
+  const quality = statQuality(stats);
   return `
     <main class="matchday">
       <section class="match-board">
@@ -385,6 +419,7 @@ function todayView(match, stats, game, discipline) {
       </section>
       <section class="hero-match">
         <div class="match-kicker">Group ${match.group} · ${match.venue} · ${matchStatus(match)}</div>
+        <div class="quality-chip ${quality.tone}"><b>${quality.label}</b><span>${quality.detail}</span></div>
         <div class="scoreline">
           ${team(match.home)}
           <strong>${scoreText(game)}</strong>
@@ -404,7 +439,7 @@ function todayView(match, stats, game, discipline) {
         <div class="fan-read">${fanRead(match, stats)}</div>
         <div class="lopsided-card ${lop.level}">
           <div><span>Lopsidedness</span><b>${lop.label}</b></div>
-          <p>${lop.leader} foul gap: ${lop.gap}. Expected noise band: ±${lop.noise80} medium, ±${lop.noise95} high confidence from ${lop.total} total fouls.</p>
+          <p>${lopsidedCopy(stats, lop, quality)}</p>
         </div>
         <div class="ref-season">
           <h2>${stats.referee}'s tournament</h2>
@@ -471,11 +506,19 @@ function sortedMatches() {
 
 function fanRead(match, stats) {
   const lop = lopsidedAssessment(stats);
+  const quality = statQuality(stats);
+  if (quality.tone === "projected") return `This is a pre-match read, not a final stat sheet. The foul bar is there to show where the matchup could get touchy once the game starts.`;
   if (lop.level === "clear") return `${stats.referee} is calling this one heavily against ${lop.leader}. At ${stats.home_fouls}-${stats.away_fouls} fouls, that gap is big enough to feel like a real match story, not just normal chaos.`;
   if (lop.level === "lean") return `${stats.referee}'s whistle is starting to tilt toward ${lop.leader}. It is not a full-blown controversy yet, but the ${stats.home_fouls}-${stats.away_fouls} foul count is worth watching.`;
   if (stats.red_cards) return `This match already has a sending off, so the mood is different now. Every late tackle, protest, and crowded challenge is going to feel a little more dangerous.`;
   if (stats.yellow_cards >= 6) return `The referee has gone to the pocket a lot today: ${stats.yellow_cards} yellows so far. One clumsy challenge could turn someone's night from tense to finished.`;
   return `This still feels fairly even. The foul count is ${stats.home_fouls}-${stats.away_fouls}, close enough that the referee has not become the main character yet.`;
+}
+
+function lopsidedCopy(stats, lop, quality) {
+  if (quality.tone === "projected") return `Projected foul split: ${stats.home_fouls}-${stats.away_fouls}. This is useful for pre-match shape, but it should not be read as an official match stat.`;
+  if (quality.tone === "modeled") return `Modeled foul split: ${stats.home_fouls}-${stats.away_fouls}. The gap is ${lop.gap}; treat the tilt as a watch signal until a verified foul feed replaces the cache.`;
+  return `${lop.leader} foul gap: ${lop.gap}. Expected noise band: ±${lop.noise80} medium, ±${lop.noise95} high confidence from ${lop.total} total fouls.`;
 }
 
 function playersView(discipline) {
@@ -538,6 +581,7 @@ function pitch(stats) {
 function matchCard(match) {
   const game = gameFor(match);
   const stats = statsFor(match);
+  const quality = statQuality(stats);
   const totalCards = stats.yellow_cards + stats.red_cards;
   const totalFouls = stats.home_fouls + stats.away_fouls;
   return `
@@ -549,6 +593,7 @@ function matchCard(match) {
         ${team(match.away)}
       </div>
       <div class="match-card-ref"><b>${stats.referee}</b><span>${stats.referee_country}</span></div>
+      <div class="quality-chip compact ${quality.tone}"><b>${quality.label}</b><span>${quality.tone === "projected" ? "pre-match" : quality.tone === "modeled" ? "needs stat feed" : "verified"}</span></div>
       <div class="match-card-stats">
         <span>${totalFouls} fouls</span>
         <span>${totalCards} cards</span>
@@ -580,7 +625,7 @@ function lopsidedItem(stats) {
 }
 
 function teamItem(row) {
-  return `<button class="row-card" data-team="${row.team}"><div>${team(row.team)}</div><strong>${row.yellows}Y ${row.reds}R</strong><em>${row.fouls} fouls · ${cleanNumber(row.foulsPerMatch, 1)}/match · ${row.atRisk} at risk</em></button>`;
+  return `<button class="row-card" data-team="${row.team}"><div>${team(row.team)}</div><strong>${row.yellows}Y ${row.reds}R</strong><em>${row.matches} played · ${row.fouls} fouls · ${cleanNumber(row.foulsPerMatch, 1)}/match · ${row.atRisk} at risk</em></button>`;
 }
 
 function matchButton(match) {
@@ -592,11 +637,12 @@ function matchButton(match) {
 function lopsidedBar(match, stats) {
   const total = stats.home_fouls + stats.away_fouls;
   const lop = lopsidedAssessment(stats);
+  const quality = statQuality(stats);
   const homePct = total ? Math.max(8, Math.min(92, (stats.home_fouls / total) * 100)) : 50;
   const awayPct = total ? Math.max(8, 100 - homePct) : 50;
-  const label = lop.level === "unknown" ? "No foul data yet" : lop.level === "normal" ? "fairly even" : `tilting toward ${lop.leader}`;
+  const label = quality.tone === "projected" ? "projected" : quality.tone === "modeled" ? "modeled" : lop.level === "unknown" ? "No foul data yet" : lop.level === "normal" ? "fairly even" : `tilting toward ${lop.leader}`;
   return `
-    <div class="tilt-meter ${lop.level}" aria-label="${match.home} ${stats.home_fouls} fouls, ${match.away} ${stats.away_fouls} fouls">
+    <div class="tilt-meter ${lop.level} ${quality.tone}" aria-label="${match.home} ${stats.home_fouls} fouls, ${match.away} ${stats.away_fouls} fouls">
       <div class="tilt-label"><span>${match.home}</span><b>${label}</b><span>${match.away}</span></div>
       <div class="tilt-track"><span class="tilt-home" style="width:${homePct}%"></span><span class="tilt-away" style="width:${awayPct}%"></span></div>
       <div class="tilt-count"><span>${stats.home_fouls}</span><span>${stats.away_fouls}</span></div>
@@ -607,14 +653,21 @@ function lopsidedBar(match, stats) {
 function teamProfileModal(teamName, discipline) {
   const base = byTeam.get(teamName) || {};
   const row = teamDirtyProfile(teamName);
-  const matches = state.stats.filter((stat) => stat.home === teamName || stat.away === teamName);
+  const matches = playedStats().filter((stat) => stat.home === teamName || stat.away === teamName);
+  const projections = state.stats.filter((stat) => (stat.home === teamName || stat.away === teamName) && !isPlayedStat(stat));
   const playerRows = discipline.filter((player) => player.team === teamName).slice(0, 6);
   const matchList = matches.slice(-5).reverse().map((stat) => {
     const opponent = stat.home === teamName ? stat.away : stat.home;
     const fouls = stat.home === teamName ? stat.home_fouls : stat.away_fouls;
     const against = stat.home === teamName ? stat.away_fouls : stat.home_fouls;
-    return `<article class="mini-game"><b>${opponent}</b><span>${fouls}-${against} fouls</span><em>${stat.referee} · ${stat.yellow_cards}Y ${stat.red_cards}R · ${stat.var_reviews} VAR</em></article>`;
-  }).join("") || `<p class="empty-note">No cached match profile yet.</p>`;
+    return `<article class="mini-game"><b>${opponent}</b><span>${fouls}-${against} modeled fouls</span><em>${stat.referee} · ${stat.yellow_cards}Y ${stat.red_cards}R · ${stat.var_reviews} VAR</em></article>`;
+  }).join("") || `<p class="empty-note">No played match sample yet.</p>`;
+  const projectionList = projections.slice(0, 3).map((stat) => {
+    const opponent = stat.home === teamName ? stat.away : stat.home;
+    const fouls = stat.home === teamName ? stat.home_fouls : stat.away_fouls;
+    const against = stat.home === teamName ? stat.away_fouls : stat.home_fouls;
+    return `<article class="mini-game projected"><b>${opponent}</b><span>${fouls}-${against} projected</span><em>${stat.referee} · pre-match estimate</em></article>`;
+  }).join("") || `<p class="empty-note">No future projections in the cache.</p>`;
   return `
     <div class="modal-backdrop" data-close-profile>
       <section class="team-modal" role="dialog" aria-label="${teamName} team profile">
@@ -627,13 +680,15 @@ function teamProfileModal(teamName, discipline) {
           ${pill("Fouls", row.fouls)}
           ${pill("Fouls/game", cleanNumber(row.foulsPerMatch, 1))}
           ${pill("Cards", `${row.yellows}Y ${row.reds}R`)}
-          ${pill("At risk", row.atRisk)}
+          ${pill("Played", row.matches)}
         </div>
         <div class="profile-grid">
           <div class="ref-games"><h3>Recent match discipline</h3>${matchList}</div>
           <div class="ref-games"><h3>Players to watch</h3>${playerRows.map(playerItem).join("") || `<p class="empty-note">No player cards logged yet.</p>`}</div>
+          <div class="ref-games"><h3>Upcoming estimates</h3>${projectionList}</div>
+          <div class="ref-games"><h3>Data read</h3><p class="empty-note">${teamDataRead(row, projections.length)}</p></div>
         </div>
-        <p class="profile-note">Team rank uses fouls, cards, reds, and suspension risk. It is a quick fan read, not an accusation.</p>
+        <p class="profile-note">Played totals exclude future projections. Foul detail is still modeled until an official event/stat feed is connected to the worker.</p>
       </section>
     </div>
   `;
@@ -644,6 +699,11 @@ function teamProfileRead(row) {
   if (row.label === "dirty") return `${row.team} have been one of the hotter teams in the discipline table: rank ${row.rank}, ${cleanNumber(row.foulsPerMatch, 1)} fouls per match, and ${row.atRisk} players already on watch.`;
   if (row.label === "chippy") return `${row.team} are not out of control, but they do play with an edge: ${cleanNumber(row.foulsPerMatch, 1)} fouls per match and ${row.yellows} yellows so far.`;
   return `${row.team} have mostly stayed out of the mess: ${cleanNumber(row.foulsPerMatch, 1)} fouls per match, with the card count still manageable.`;
+}
+
+function teamDataRead(row, projectionCount) {
+  if (!row.matches) return `${row.team} has no played match sample in the worker yet. The visible bars are matchup estimates until the tournament feed catches up.`;
+  return `${row.team}'s profile is built from ${row.matches} played match${row.matches === 1 ? "" : "es"} and keeps ${projectionCount} future estimate${projectionCount === 1 ? "" : "s"} separate. That is why this card may disagree with a raw all-fixtures sum.`;
 }
 
 function bind() {

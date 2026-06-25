@@ -230,6 +230,53 @@ em,
   font-size: 12px;
 }
 
+.quality-chip {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  padding: 9px 10px;
+}
+
+.quality-chip b {
+  flex: 0 0 auto;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.quality-chip span {
+  min-width: 0;
+  color: var(--pencil);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quality-chip.projected {
+  background: #fff6cf;
+}
+
+.quality-chip.modeled {
+  background: #eef6ff;
+}
+
+.quality-chip.verified {
+  background: #f2fff0;
+}
+
+.quality-chip.compact {
+  padding: 6px 8px;
+}
+
+.quality-chip.compact span {
+  font-size: 11px;
+}
+
 .tilt-meter {
   display: grid;
   gap: 4px;
@@ -287,6 +334,14 @@ em,
 .tilt-meter.clear .tilt-track,
 .tilt-meter.lean .tilt-track {
   box-shadow: 0 0 0 2px rgba(255, 227, 109, .7);
+}
+
+.tilt-meter.projected {
+  opacity: .82;
+}
+
+.tilt-meter.projected .tilt-track {
+  border-style: dashed;
 }
 
 .match-card-score {
@@ -482,6 +537,10 @@ em,
 
 .mini-game em {
   grid-column: 1 / -1;
+}
+
+.mini-game.projected {
+  background: #fffaf0;
 }
 
 .prompt-list {
