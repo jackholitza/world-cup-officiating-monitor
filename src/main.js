@@ -17,7 +17,8 @@ const state = {
   active: "today",
   selectedMatchId: "GA1",
   selectedTeam: "Mexico",
-  sort: "today",
+  profileTeam: null,
+  sort: "all",
   status: "cache",
   updated: new Date()
 };
@@ -169,12 +170,15 @@ function playerDiscipline() {
 function teamDiscipline() {
   return teams.map((team) => {
     const cards = allCardEvents().filter((event) => event.team === team.country);
-    const fouls = allFoulEvents().filter((event) => event.team === team.country);
+    const matchRows = state.stats.filter((stat) => stat.home === team.country || stat.away === team.country);
+    const fouls = matchRows.reduce((sum, stat) => sum + (stat.home === team.country ? stat.home_fouls : stat.away_fouls), 0);
     return {
       team: team.country,
       yellows: cards.filter((event) => event.card !== "red").length,
       reds: cards.filter((event) => event.card === "red").length,
-      fouls: fouls.length,
+      fouls,
+      matches: matchRows.length,
+      foulsPerMatch: matchRows.length ? fouls / matchRows.length : 0,
       atRisk: playerDiscipline().filter((player) => player.team === team.country && player.atRisk).length
     };
   }).sort((a, b) => b.yellows + b.reds * 2 - (a.yellows + a.reds * 2) || b.fouls - a.fouls);
@@ -229,12 +233,12 @@ function refSeason(referee) {
 function teamDirtyProfile(teamName) {
   const table = teamDiscipline();
   const row = table.find((team) => team.team === teamName) || { team: teamName, yellows: 0, reds: 0, fouls: 0, atRisk: 0 };
-  const score = row.fouls + row.yellows * 3 + row.reds * 7 + row.atRisk * 2;
-  const ranked = table.map((team) => ({ ...team, score: team.fouls + team.yellows * 3 + team.reds * 7 + team.atRisk * 2 })).sort((a, b) => b.score - a.score);
+  const score = row.foulsPerMatch * 1.6 + row.yellows * 1.8 + row.reds * 5 + row.atRisk * 1.5;
+  const ranked = table.map((team) => ({ ...team, score: team.foulsPerMatch * 1.6 + team.yellows * 1.8 + team.reds * 5 + team.atRisk * 1.5 })).sort((a, b) => b.score - a.score);
   const rank = Math.max(1, ranked.findIndex((team) => team.team === teamName) + 1);
   let label = "quiet";
-  if (rank <= 8 || score >= 24) label = "dirty";
-  else if (rank <= 18 || score >= 14) label = "chippy";
+  if (rank <= 8 || score >= 34) label = "dirty";
+  else if (rank <= 18 || score >= 24) label = "chippy";
   return { ...row, score, rank, label };
 }
 
@@ -339,6 +343,7 @@ function render() {
     ${state.active === "players" ? playersView(discipline) : ""}
     ${state.active === "refs" ? refsView() : ""}
     ${state.active === "teams" ? teamsView() : ""}
+    ${state.profileTeam ? teamProfileModal(state.profileTeam, discipline) : ""}
   `;
   bind();
 }
@@ -371,6 +376,7 @@ function todayView(match, stats, game, discipline) {
             <option value="today" ${state.sort === "today" ? "selected" : ""}>Today</option>
             <option value="live" ${state.sort === "live" ? "selected" : ""}>Live / Finished</option>
             <option value="upcoming" ${state.sort === "upcoming" ? "selected" : ""}>Upcoming</option>
+            <option value="all" ${state.sort === "all" ? "selected" : ""}>All matches</option>
             <option value="cards" ${state.sort === "cards" ? "selected" : ""}>Most cards</option>
             <option value="fouls" ${state.sort === "fouls" ? "selected" : ""}>Most fouls</option>
           </select></label>
@@ -460,7 +466,7 @@ function sortedMatches() {
     if (state.sort === "fouls") return statsFor(b).home_fouls + statsFor(b).away_fouls - (statsFor(a).home_fouls + statsFor(a).away_fouls);
     return new Date(a.datetime_mt) - new Date(b.datetime_mt);
   });
-  return list.slice(0, state.sort === "today" ? 16 : 28);
+  return list.slice(0, state.sort === "today" ? 16 : state.sort === "all" ? fixtures.length : 28);
 }
 
 function fanRead(match, stats) {
@@ -515,7 +521,7 @@ function teamsView() {
 
 function team(name) {
   const t = byTeam.get(name) || {};
-  return `<span class="team"><span>${t.flag || "•"}</span>${name}</span>`;
+  return `<span class="team" data-team="${name}" role="button" tabindex="0"><span>${t.flag || "•"}</span>${name}</span>`;
 }
 
 function pill(label, value) {
@@ -548,6 +554,7 @@ function matchCard(match) {
         <span>${totalCards} cards</span>
         <span>${stats.var_reviews} VAR</span>
       </div>
+      ${lopsidedBar(match, stats)}
     </button>
   `;
 }
@@ -573,18 +580,78 @@ function lopsidedItem(stats) {
 }
 
 function teamItem(row) {
-  return `<article class="row-card"><div>${team(row.team)}</div><strong>${row.yellows}Y ${row.reds}R</strong><em>${row.fouls} fouls · ${row.atRisk} at risk</em></article>`;
+  return `<button class="row-card" data-team="${row.team}"><div>${team(row.team)}</div><strong>${row.yellows}Y ${row.reds}R</strong><em>${row.fouls} fouls · ${cleanNumber(row.foulsPerMatch, 1)}/match · ${row.atRisk} at risk</em></button>`;
 }
 
 function matchButton(match) {
   const game = gameFor(match);
   const stats = statsFor(match);
-  return `<button class="match-button ${match.match_id === state.selectedMatchId ? "active" : ""}" data-match="${match.match_id}"><span>${matchStatus(match)}</span><b>${match.home} ${scoreText(game, "-")} ${match.away}</b><em>${stats.referee}</em></button>`;
+  return `<button class="match-button ${match.match_id === state.selectedMatchId ? "active" : ""}" data-match="${match.match_id}"><span>${matchStatus(match)}</span><b>${match.home} ${scoreText(game, "-")} ${match.away}</b><em>${stats.referee}</em>${lopsidedBar(match, stats)}</button>`;
+}
+
+function lopsidedBar(match, stats) {
+  const total = stats.home_fouls + stats.away_fouls;
+  const lop = lopsidedAssessment(stats);
+  const homePct = total ? Math.max(8, Math.min(92, (stats.home_fouls / total) * 100)) : 50;
+  const awayPct = total ? Math.max(8, 100 - homePct) : 50;
+  const label = lop.level === "unknown" ? "No foul data yet" : lop.level === "normal" ? "fairly even" : `tilting toward ${lop.leader}`;
+  return `
+    <div class="tilt-meter ${lop.level}" aria-label="${match.home} ${stats.home_fouls} fouls, ${match.away} ${stats.away_fouls} fouls">
+      <div class="tilt-label"><span>${match.home}</span><b>${label}</b><span>${match.away}</span></div>
+      <div class="tilt-track"><span class="tilt-home" style="width:${homePct}%"></span><span class="tilt-away" style="width:${awayPct}%"></span></div>
+      <div class="tilt-count"><span>${stats.home_fouls}</span><span>${stats.away_fouls}</span></div>
+    </div>
+  `;
+}
+
+function teamProfileModal(teamName, discipline) {
+  const base = byTeam.get(teamName) || {};
+  const row = teamDirtyProfile(teamName);
+  const matches = state.stats.filter((stat) => stat.home === teamName || stat.away === teamName);
+  const playerRows = discipline.filter((player) => player.team === teamName).slice(0, 6);
+  const matchList = matches.slice(-5).reverse().map((stat) => {
+    const opponent = stat.home === teamName ? stat.away : stat.home;
+    const fouls = stat.home === teamName ? stat.home_fouls : stat.away_fouls;
+    const against = stat.home === teamName ? stat.away_fouls : stat.home_fouls;
+    return `<article class="mini-game"><b>${opponent}</b><span>${fouls}-${against} fouls</span><em>${stat.referee} · ${stat.yellow_cards}Y ${stat.red_cards}R · ${stat.var_reviews} VAR</em></article>`;
+  }).join("") || `<p class="empty-note">No cached match profile yet.</p>`;
+  return `
+    <div class="modal-backdrop" data-close-profile>
+      <section class="team-modal" role="dialog" aria-label="${teamName} team profile">
+        <button class="modal-close" data-close-profile aria-label="Close team profile">x</button>
+        <div class="team-profile-head">
+          <span>${base.flag || "•"}</span>
+          <div><h2>${teamName}</h2><p>${teamProfileRead(row)}</p></div>
+        </div>
+        <div class="stat-row">
+          ${pill("Fouls", row.fouls)}
+          ${pill("Fouls/game", cleanNumber(row.foulsPerMatch, 1))}
+          ${pill("Cards", `${row.yellows}Y ${row.reds}R`)}
+          ${pill("At risk", row.atRisk)}
+        </div>
+        <div class="profile-grid">
+          <div class="ref-games"><h3>Recent match discipline</h3>${matchList}</div>
+          <div class="ref-games"><h3>Players to watch</h3>${playerRows.map(playerItem).join("") || `<p class="empty-note">No player cards logged yet.</p>`}</div>
+        </div>
+        <p class="profile-note">Team rank uses fouls, cards, reds, and suspension risk. It is a quick fan read, not an accusation.</p>
+      </section>
+    </div>
+  `;
+}
+
+function teamProfileRead(row) {
+  if (!row.matches) return "No real match sample yet, so this profile will fill in as the tournament cache grows.";
+  if (row.label === "dirty") return `${row.team} have been one of the hotter teams in the discipline table: rank ${row.rank}, ${cleanNumber(row.foulsPerMatch, 1)} fouls per match, and ${row.atRisk} players already on watch.`;
+  if (row.label === "chippy") return `${row.team} are not out of control, but they do play with an edge: ${cleanNumber(row.foulsPerMatch, 1)} fouls per match and ${row.yellows} yellows so far.`;
+  return `${row.team} have mostly stayed out of the mess: ${cleanNumber(row.foulsPerMatch, 1)} fouls per match, with the card count still manageable.`;
 }
 
 function bind() {
   app.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => { state.active = button.dataset.tab; render(); }));
-  app.querySelectorAll("[data-match]").forEach((button) => button.addEventListener("click", () => { state.selectedMatchId = button.dataset.match; state.active = "today"; render(); }));
+  app.querySelectorAll("[data-team]").forEach((el) => el.addEventListener("click", (event) => { event.stopPropagation(); state.profileTeam = el.dataset.team; render(); }));
+  app.querySelectorAll("[data-team]").forEach((el) => el.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); state.profileTeam = el.dataset.team; render(); } }));
+  app.querySelectorAll("[data-close-profile]").forEach((el) => el.addEventListener("click", (event) => { if (event.target === el || el.classList.contains("modal-close")) { state.profileTeam = null; render(); } }));
+  app.querySelectorAll("[data-match]").forEach((button) => button.addEventListener("click", (event) => { if (event.target.closest("[data-team]")) return; state.selectedMatchId = button.dataset.match; state.active = "today"; render(); }));
   app.querySelector("[data-sort]")?.addEventListener("change", (event) => { state.sort = event.target.value; render(); });
   app.querySelector("[data-refresh]")?.addEventListener("click", refresh);
 }
