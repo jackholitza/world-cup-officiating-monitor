@@ -60,7 +60,8 @@ async function matchStats(env) {
 }
 
 async function refreshCache(env) {
-  const [nextGames, nextStats] = await Promise.all([fetchGames(env), fetchMatchStats(env)]);
+  const cachedStats = await readCache(env, "match-stats");
+  const [nextGames, nextStats] = await Promise.all([fetchGames(env), fetchMatchStats(env, cachedStats)]);
   const wrote = {};
   wrote.games = await writeCache(env, "games", nextGames || annotate(gamesSeed, "wclive-seed-cache"));
   if (nextStats) wrote.match_stats = await writeCache(env, "match-stats", nextStats);
@@ -82,16 +83,206 @@ async function fetchGames(env) {
   return null;
 }
 
-async function fetchMatchStats(env) {
+async function fetchMatchStats(env, cachedStats = null) {
   if (env.DISCIPLINE_JSON_URL) {
     const publicJson = await tryJson(env.DISCIPLINE_JSON_URL);
     if (publicJson) return annotate(publicJson, "public-json-feed");
   }
+  const espn = await fetchEspnMatchStats(cachedStats);
+  if (espn?.results?.length) return annotate(espn, "espn-public-verified");
   if (hasReddit(env)) {
     const reddit = await tryReddit(env, "wc_match_stats");
     if (reddit) return annotate(reddit, "reddit-oauth-free");
   }
   return annotate(matchStatsSeed, "free-static-worker-cache");
+}
+
+async function fetchEspnMatchStats(cachedStats = null) {
+  const dates = dateRange("2026-06-11", new Date().toISOString().slice(0, 10));
+  const existingRows = cachedStats?.meta?.source === "espn-public-verified" ? cachedStats.results || [] : [];
+  const rows = [...existingRows];
+  const seen = new Set(existingRows.map((row) => String(row.espn_event_id || "")));
+  const eventIds = [];
+  for (const date of dates) {
+    const scoreboard = await tryJson(`https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=${date.replaceAll("-", "")}`);
+    for (const event of scoreboard?.events || []) {
+      const competition = event.competitions?.[0];
+      if (!competition?.status?.type?.completed) continue;
+      if (!seen.has(String(event.id))) eventIds.push(event.id);
+    }
+  }
+  for (const eventId of eventIds.slice(0, 10)) {
+      const row = await espnEventStats(eventId);
+      if (row) rows.push(row);
+  }
+  rows.sort((a, b) => new Date(a.local_date || 0) - new Date(b.local_date || 0));
+  return {
+    meta: {
+      source: "espn-public-verified",
+      source_url: "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
+      rows: rows.length,
+      missing_completed: Math.max(0, eventIds.length - 10),
+      refresh_batch_size: Math.min(10, eventIds.length),
+      updated_at: new Date().toISOString(),
+      paid_tokens: false
+    },
+    results: rows
+  };
+}
+
+async function espnEventStats(eventId) {
+  const summary = await tryJson(`https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event=${eventId}`);
+  const competition = summary?.header?.competitions?.[0];
+  const competitors = competition?.competitors || [];
+  if (competitors.length < 2) return null;
+  const home = competitors.find((team) => team.homeAway === "home") || competitors[0];
+  const away = competitors.find((team) => team.homeAway === "away") || competitors[1];
+  const homeName = canonicalTeam(home.team?.displayName);
+  const awayName = canonicalTeam(away.team?.displayName);
+  const homeStats = await espnCompetitorStats(eventId, home.id);
+  const awayStats = await espnCompetitorStats(eventId, away.id);
+  const commentary = summary?.commentary || [];
+  const matchId = matchIdFor(homeName, awayName);
+  const cardEvents = espnCardEvents(commentary, matchId);
+  const foulEvents = espnFoulEvents(commentary, matchId, homeName, awayName);
+  const varEvents = espnVarEvents(commentary);
+  const referee = summary?.gameInfo?.officials?.find((official) => official.position?.displayName === "Referee") || summary?.gameInfo?.officials?.[0];
+  return {
+    match_id: matchId,
+    espn_event_id: eventId,
+    home: homeName,
+    away: awayName,
+    group: groupFor(homeName, awayName),
+    local_date: competition.date,
+    referee: referee?.displayName || referee?.fullName || "Assignment pending",
+    referee_country: "TBD",
+    confederation: "FIFA",
+    crew: "ESPN public match summary",
+    home_fouls: statValue(homeStats, "foulsCommitted"),
+    away_fouls: statValue(awayStats, "foulsCommitted"),
+    home_offsides: statValue(homeStats, "offsides"),
+    away_offsides: statValue(awayStats, "offsides"),
+    yellow_cards: statValue(homeStats, "yellowCards") + statValue(awayStats, "yellowCards"),
+    red_cards: statValue(homeStats, "redCards") + statValue(awayStats, "redCards"),
+    penalties: statValue(homeStats, "penaltyKickShots") + statValue(awayStats, "penaltyKickShots"),
+    var_reviews: varEvents.length,
+    card_events: cardEvents,
+    foul_events: foulEvents,
+    var_events: varEvents,
+    confidence: "verified-public-connector",
+    source: "espn-public-verified",
+    stat_url: `https://www.espn.com/soccer/match/_/gameId/${eventId}`,
+    connector_links: [
+      { label: "ESPN match summary", url: `https://www.espn.com/soccer/match/_/gameId/${eventId}` },
+      { label: "ESPN public summary JSON", url: `https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event=${eventId}` }
+    ]
+  };
+}
+
+async function espnCompetitorStats(eventId, teamId) {
+  const payload = await tryJson(`https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world/events/${eventId}/competitions/${eventId}/competitors/${teamId}/statistics?lang=en&region=us`);
+  return (payload?.splits?.categories || []).flatMap((category) => category.stats || []);
+}
+
+function statValue(stats, name) {
+  const value = stats.find((stat) => stat.name === name)?.value;
+  return Number.isFinite(Number(value)) ? Number(value) : 0;
+}
+
+function espnCardEvents(commentary, matchId) {
+  return commentary.map((item) => {
+    const play = item.play || {};
+    const type = play.type?.type;
+    if (!["yellow-card", "red-card"].includes(type)) return null;
+    return {
+      match_id: matchId,
+      team: canonicalTeam(play.team?.displayName),
+      player_name: play.participants?.[0]?.athlete?.displayName || playerFromText(item.text),
+      minute: minuteValue(item.time?.displayValue || play.clock?.displayValue),
+      card: type === "red-card" ? "red" : "yellow",
+      reason: item.text || play.text || play.shortText || "card",
+      source_play_id: play.id
+    };
+  }).filter(Boolean);
+}
+
+function espnFoulEvents(commentary, matchId, homeName, awayName) {
+  const seen = new Set();
+  const rows = [];
+  for (const item of commentary) {
+    const play = item.play || {};
+    if (play.type?.type !== "foul" || !play.id || seen.has(play.id)) continue;
+    seen.add(play.id);
+    const team = canonicalTeam(play.team?.displayName);
+    rows.push({
+      match_id: matchId,
+      team,
+      opponent: team === homeName ? awayName : homeName,
+      player_name: play.participants?.[0]?.athlete?.displayName || playerFromText(item.text),
+      minute: minuteValue(item.time?.displayValue || play.clock?.displayValue),
+      type: item.text || play.shortText || "foul",
+      source_play_id: play.id
+    });
+  }
+  return rows;
+}
+
+function espnVarEvents(commentary) {
+  return commentary.map((item) => {
+    const play = item.play || {};
+    const type = `${play.type?.type || ""} ${play.type?.text || ""} ${item.text || ""}`;
+    if (!/\bvar\b/i.test(type)) return null;
+    return {
+      team: canonicalTeam(play.team?.displayName),
+      player_name: play.participants?.[0]?.athlete?.displayName || playerFromText(item.text),
+      minute: minuteValue(item.time?.displayValue || play.clock?.displayValue),
+      decision: item.text || play.text || play.shortText || "VAR review",
+      source_play_id: play.id
+    };
+  }).filter(Boolean);
+}
+
+function playerFromText(text = "") {
+  const match = text.match(/(?:by|for|Decision: Card upgraded)\s+([^().]+)(?:\s+\(|\.|$)/i);
+  return match?.[1]?.trim() || "";
+}
+
+function minuteValue(display = "") {
+  const match = String(display).match(/\d+/);
+  return match ? Number(match[0]) : 0;
+}
+
+function dateRange(start, end) {
+  const dates = [];
+  const cursor = new Date(`${start}T00:00:00Z`);
+  const stop = new Date(`${end}T00:00:00Z`);
+  while (cursor <= stop) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+function canonicalTeam(value) {
+  const raw = String(value || "").trim();
+  const manual = { Turkey: "Türkiye", Turkiye: "Türkiye", "Congo DR": "DR Congo", "United States": "United States", USA: "United States", Curacao: "Curaçao" };
+  return manual[raw] || raw;
+}
+
+function matchIdFor(home, away) {
+  const match = matchStatsSeed.results.find((row) => row.home === home && row.away === away)
+    || matchStatsSeed.results.find((row) => row.home === away && row.away === home);
+  return match?.match_id || `${slug(home)}-${slug(away)}`;
+}
+
+function groupFor(home, away) {
+  const match = matchStatsSeed.results.find((row) => row.home === home && row.away === away)
+    || matchStatsSeed.results.find((row) => row.home === away && row.away === home);
+  return match?.group || "";
+}
+
+function slug(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 async function readCache(env, key) {

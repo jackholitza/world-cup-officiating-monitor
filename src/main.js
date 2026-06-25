@@ -91,7 +91,9 @@ function normalizeStats(row) {
     penalties: number(row.penalties),
     var_reviews: number(row.var_reviews),
     card_events: Array.isArray(row.card_events) ? row.card_events : [],
-    foul_events: Array.isArray(row.foul_events) ? row.foul_events : []
+    foul_events: Array.isArray(row.foul_events) ? row.foul_events : [],
+    var_events: Array.isArray(row.var_events) ? row.var_events : [],
+    connector_links: Array.isArray(row.connector_links) ? row.connector_links : []
   };
 }
 
@@ -144,7 +146,9 @@ function statQuality(stats) {
   const confidence = String(stats.confidence || "").toLowerCase();
   const played = isPlayedStat(stats);
   const modeled = source.includes("free-cache") || source.includes("seed") || confidence.includes("seed");
+  const verified = source.includes("espn-public-verified") || confidence.includes("verified");
   if (!played) return { label: "Projected", detail: "pre-match estimate, not a final stat sheet", tone: "projected" };
+  if (verified) return { label: "Verified", detail: "ESPN public match stats connector", tone: "verified" };
   if (modeled) return { label: "Modeled", detail: "score is live; foul/card detail still needs a verified stat feed", tone: "modeled" };
   return { label: "Verified", detail: "stat feed connected", tone: "verified" };
 }
@@ -398,6 +402,7 @@ function todayView(match, stats, game, discipline) {
   const season = refSeason(stats.referee);
   const cards = stats.card_events || [];
   const fouls = stats.foul_events || [];
+  const varEvents = stats.var_events || [];
   const risks = discipline.filter((player) => [match.home, match.away].includes(player.team) && (player.atRisk || player.red)).slice(0, 8);
   const lop = lopsidedAssessment(stats);
   const quality = statQuality(stats);
@@ -441,6 +446,7 @@ function todayView(match, stats, game, discipline) {
           <div><span>Lopsidedness</span><b>${lop.label}</b></div>
           <p>${lopsidedCopy(stats, lop, quality)}</p>
         </div>
+        ${sourcePanel(stats, quality)}
         <div class="ref-season">
           <h2>${stats.referee}'s tournament</h2>
           <div class="stat-row">
@@ -464,6 +470,10 @@ function todayView(match, stats, game, discipline) {
       <section class="side-panel">
         <h2>Match feed</h2>
         <div class="event-list">${[...cards, ...fouls.slice(0, 8)].sort((a, b) => a.minute - b.minute).map(eventItem).join("") || "<p>No events in cache yet.</p>"}</div>
+      </section>
+      <section class="side-panel">
+        <h2>VAR decisions</h2>
+        <div class="event-list">${varEvents.map(varItem).join("") || "<p>No VAR decisions found in the verified commentary.</p>"}</div>
       </section>
       <section class="side-panel">
         <h2>Games</h2>
@@ -519,6 +529,17 @@ function lopsidedCopy(stats, lop, quality) {
   if (quality.tone === "projected") return `Projected foul split: ${stats.home_fouls}-${stats.away_fouls}. This is useful for pre-match shape, but it should not be read as an official match stat.`;
   if (quality.tone === "modeled") return `Modeled foul split: ${stats.home_fouls}-${stats.away_fouls}. The gap is ${lop.gap}; treat the tilt as a watch signal until a verified foul feed replaces the cache.`;
   return `${lop.leader} foul gap: ${lop.gap}. Expected noise band: ±${lop.noise80} medium, ±${lop.noise95} high confidence from ${lop.total} total fouls.`;
+}
+
+function sourcePanel(stats, quality) {
+  const links = stats.connector_links || [];
+  return `
+    <div class="source-panel ${quality.tone}">
+      <div><span>Source connector</span><b>${quality.label}</b></div>
+      <p>${quality.detail}. Fouls, cards, offsides, penalties, and VAR counts are only treated as verified when this panel links to a public match source.</p>
+      <div class="source-links">${links.map((link) => `<a href="${link.url}" target="_blank" rel="noreferrer">${link.label}</a>`).join("") || "<span>No verified connector attached yet.</span>"}</div>
+    </div>
+  `;
 }
 
 function playersView(discipline) {
@@ -607,6 +628,10 @@ function matchCard(match) {
 function eventItem(event) {
   const card = event.card ? `<b class="${event.card}">${event.card === "red" ? "RED" : "YELLOW"}</b>` : "<b>FOUL</b>";
   return `<article class="event"><span>${event.minute}'</span>${card}<div><strong>${event.player_name}</strong><em>${event.team} · ${event.reason || event.type}</em></div></article>`;
+}
+
+function varItem(event) {
+  return `<article class="event var-event"><span>${event.minute}'</span><b>VAR</b><div><strong>${event.player_name || event.team || "Review"}</strong><em>${event.decision}</em></div></article>`;
 }
 
 function playerItem(player) {

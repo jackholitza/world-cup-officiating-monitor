@@ -468,7 +468,8 @@ em,
 
 .lopsided-card,
 .ref-season,
-.prompt-board {
+.prompt-board,
+.source-panel {
   display: grid;
   gap: 10px;
   min-width: 0;
@@ -483,6 +484,55 @@ em,
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
+}
+
+.source-panel {
+  background: #f7fbff;
+}
+
+.source-panel.verified {
+  background: #f2fff0;
+}
+
+.source-panel.modeled,
+.source-panel.projected {
+  background: #fff6cf;
+}
+
+.source-panel div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.source-panel span,
+.source-panel div:first-child span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.source-panel p {
+  color: var(--pencil);
+}
+
+.source-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.source-links a,
+.source-links span {
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  padding: 7px 9px;
+  font-size: 13px;
+  font-weight: 900;
+  text-decoration: none;
 }
 
 .lopsided-card span {
@@ -637,6 +687,10 @@ em,
 
 .event b.red {
   background: var(--red);
+}
+
+.event.var-event b {
+  background: var(--blue);
 }
 
 .match-button.active,
