@@ -327,7 +327,7 @@ function render() {
     <header class="topbar">
       <div><span>World Cup discipline tracker</span><h1>Ref Watch</h1></div>
       <button class="refresh" data-refresh>↻</button>
-      <div class="feed-status"><b>${state.status}</b><small>${state.updated.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</small></div>
+      <div class="feed-status"><b>${runtimeLabel()} · ${state.status}</b><small>${state.updated.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</small></div>
     </header>
     <nav class="tabs">
       ${tab("today", "Today")}
@@ -341,6 +341,13 @@ function render() {
     ${state.active === "teams" ? teamsView() : ""}
   `;
   bind();
+}
+
+function runtimeLabel() {
+  if (location.hostname === "jackholitza.github.io") return "GitHub Pages";
+  if (location.hostname === "localhost" || location.hostname === "127.0.0.1") return "Local preview";
+  if (location.protocol === "file:") return "Local file";
+  return location.hostname || "Static site";
 }
 
 function tab(id, label) {
