@@ -1,11 +1,55 @@
 import gamesSeed from "./cache/gamesSeed.mjs";
 import matchStatsSeed from "./cache/matchStatsSeed.mjs";
+import refereesSeed from "../data/referees.js";
 
 const CACHE_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "access-control-allow-origin": "*",
   "cache-control": "public, max-age=60"
 };
+
+const REFEREE_ALIASES = {
+  "adham mohammad": "adham makhadmeh",
+  "alejandro jose hernandez hernandez": "alejandro hernandez hernandez",
+  "alejandro hernandez hernandez": "alejandro hernandez hernandez",
+  "amin omar": "amin mohamed omar",
+  "amin mohamed": "amin mohamed omar",
+  "beida damane": "dahane beida",
+  "cesar arturo ramos palazuelos": "cesar arturo ramos",
+  "clement turpin": "clement turpin",
+  "cristian garay": "cristian garay",
+  "dahane beida": "dahane beida",
+  "espen eskas": "espen eskas",
+  "francois letexier": "francois letexier",
+  "hector martinez": "said martinez",
+  "istvan kovacs": "istvan kovacs",
+  "ivan arcides barton cisneros": "ivan barton",
+  "jalal jayed": "jalal jayed",
+  "jesus valenzuela": "jesus valenzuela",
+  "joao pinheiro": "joao pinheiro",
+  "juan gabriel benitez": "juan gabriel benitez",
+  "martinez hector": "said martinez",
+  "ramon abatti abel": "ramon abatti abel",
+  "slavko vincici": "slavko vincic",
+  "wilton pereira sampaio": "wilton sampaio",
+  "yael falcon perez": "yael falcon perez"
+};
+
+const EXTRA_REFEREES = [
+  ["Alejandro Hernandez Hernandez", "Spain", "UEFA"],
+  ["Amin Mohamed Omar", "Egypt", "CAF"],
+  ["Cristian Garay", "Chile", "CONMEBOL"],
+  ["Espen Eskas", "Norway", "UEFA"],
+  ["Francois Letexier", "France", "UEFA"],
+  ["Gustavo Tejera", "Uruguay", "CONMEBOL"],
+  ["Istvan Kovacs", "Romania", "UEFA"],
+  ["Jalal Jayed", "Morocco", "CAF"],
+  ["Juan Gabriel Benitez", "Paraguay", "CONMEBOL"],
+  ["Ramon Abatti Abel", "Brazil", "CONMEBOL"],
+  ["Yael Falcon Perez", "Argentina", "CONMEBOL"]
+].map(([name, country, confederation]) => ({ name, country, confederation, crew: `${country} crew` }));
+
+const REFEREE_LOOKUP = new Map([...refereesSeed, ...EXTRA_REFEREES].map((referee) => [normalizeName(referee.name), referee]));
 
 export default {
   async fetch(request, env) {
@@ -116,17 +160,29 @@ async function fetchEspnMatchStats(cachedStats = null) {
       if (row) rows.push(row);
   }
   rows.sort((a, b) => new Date(a.local_date || 0) - new Date(b.local_date || 0));
+  const enrichedRows = rows.map(enrichRefereeRow);
   return {
     meta: {
       source: "espn-public-verified",
       source_url: "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
-      rows: rows.length,
+      rows: enrichedRows.length,
       missing_completed: Math.max(0, eventIds.length - 10),
       refresh_batch_size: Math.min(10, eventIds.length),
       updated_at: new Date().toISOString(),
       paid_tokens: false
     },
-    results: rows
+    results: enrichedRows
+  };
+}
+
+function enrichRefereeRow(row) {
+  const profile = refereeProfileFor(row.referee);
+  if (!profile) return row;
+  return {
+    ...row,
+    referee_country: row.referee_country && row.referee_country !== "TBD" ? row.referee_country : profile.country,
+    confederation: row.confederation && row.confederation !== "FIFA" ? row.confederation : profile.confederation,
+    crew: row.crew && row.crew !== "ESPN public match summary" ? row.crew : profile.crew
   };
 }
 
@@ -147,6 +203,8 @@ async function espnEventStats(eventId) {
   const foulEvents = espnFoulEvents(commentary, matchId, homeName, awayName);
   const varEvents = espnVarEvents(commentary);
   const referee = summary?.gameInfo?.officials?.find((official) => official.position?.displayName === "Referee") || summary?.gameInfo?.officials?.[0];
+  const refereeName = referee?.displayName || referee?.fullName || "Assignment pending";
+  const refereeProfile = refereeProfileFor(refereeName);
   return {
     match_id: matchId,
     espn_event_id: eventId,
@@ -154,10 +212,10 @@ async function espnEventStats(eventId) {
     away: awayName,
     group: groupFor(homeName, awayName),
     local_date: competition.date,
-    referee: referee?.displayName || referee?.fullName || "Assignment pending",
-    referee_country: "TBD",
-    confederation: "FIFA",
-    crew: "ESPN public match summary",
+    referee: refereeName,
+    referee_country: refereeProfile?.country || "Country not listed",
+    confederation: refereeProfile?.confederation || "FIFA",
+    crew: refereeProfile?.crew || "ESPN public match summary",
     home_fouls: statValue(homeStats, "foulsCommitted"),
     away_fouls: statValue(awayStats, "foulsCommitted"),
     home_offsides: statValue(homeStats, "offsides"),
@@ -177,6 +235,21 @@ async function espnEventStats(eventId) {
       { label: "ESPN public summary JSON", url: `https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event=${eventId}` }
     ]
   };
+}
+
+function refereeProfileFor(name) {
+  const normalized = normalizeName(name);
+  return REFEREE_LOOKUP.get(normalized) || REFEREE_LOOKUP.get(REFEREE_ALIASES[normalized]);
+}
+
+function normalizeName(name = "") {
+  return String(name)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 async function espnCompetitorStats(eventId, teamId) {

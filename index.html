@@ -4,31 +4,31 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>World Cup Officiating Monitor</title>
-    <meta name="deploy-version" content="20260625e" />
-    <link rel="stylesheet" href="./src/styles.css?v=20260625e" />
+    <meta name="deploy-version" content="20260625f" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260625f" />
   </head>
   <body>
     <div id="app">
       <header class="app-header fallback-header">
         <div>
-          <span class="eyebrow">World Cup data lab</span>
+          <span class="eyebrow">World Cup referee watch</span>
           <h1>Officiating Monitor</h1>
         </div>
-        <div class="status-pill"><b>loading</b><span>cache-first site</span></div>
+        <div class="status-pill"><b>loading</b><span>checking today&apos;s matches</span></div>
       </header>
       <main class="fallback-shell">
         <section class="scoreboard">
-          <div class="match-meta">Static fallback</div>
+          <div class="match-meta">Opening the match list</div>
           <div class="scoreline">
             <span class="team"><span>🏟️</span>World Cup</span>
             <strong>vs</strong>
             <span class="team"><span>🟨</span>Officials</span>
           </div>
           <div class="signal-band watch">
-            <b>LOADING</b>
-            <span>Historical officiating cache is starting up</span>
+            <b>ONE MOMENT</b>
+            <span>Pulling in the latest fouls, cards, VAR checks, and referee notes</span>
           </div>
-          <p class="fallback-copy">If this stays visible, open the public GitHub Pages URL or run a local server. Direct file:// opens can block JavaScript modules, but the dashboard is public and uses the free Cloudflare Worker cache.</p>
+          <p class="fallback-copy">If this stays visible, open the public GitHub Pages URL or run a local server. The public dashboard reads from the free Cloudflare Worker cache and verified match links.</p>
         </section>
       </main>
     </div>
@@ -45,6 +45,6 @@
         app.innerHTML = '<main class="fallback-shell"><section class="scoreboard"><div class="match-meta">Runtime diagnostic</div><h1>Officiating Monitor</h1><div class="signal-band poor"><b>APP ERROR</b><span>' + String(event.message || "Unknown JavaScript error") + '</span></div><p class="fallback-copy">The static page loaded, but the dashboard script failed. The source cache is still available in the repository.</p></section></main>';
       });
     </script>
-    <script type="module" src="./src/main.js?v=20260625e"></script>
+    <script type="module" src="./src/main.js?v=20260625f"></script>
   </body>
 </html>

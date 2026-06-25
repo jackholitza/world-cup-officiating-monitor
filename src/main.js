@@ -81,7 +81,7 @@ function normalizeStats(row) {
     home: match?.home || home,
     away: match?.away || away,
     referee: row.referee || "Assignment pending",
-    referee_country: row.referee_country || refereeByName.get(row.referee)?.country || "TBD",
+    referee_country: row.referee_country || refereeByName.get(row.referee)?.country || "Country pending",
     yellow_cards: number(row.yellow_cards),
     red_cards: number(row.red_cards),
     home_fouls: number(row.home_fouls),
@@ -147,9 +147,9 @@ function statQuality(stats) {
   const played = isPlayedStat(stats);
   const modeled = source.includes("free-cache") || source.includes("seed") || confidence.includes("seed");
   const verified = source.includes("espn-public-verified") || confidence.includes("verified");
-  if (!played) return { label: "Projected", detail: "pre-match estimate, not a final stat sheet", tone: "projected" };
+  if (!played) return { label: "Fixture watch", detail: "pre-match read, waiting for the final match sheet", tone: "projected" };
   if (verified) return { label: "Verified", detail: "ESPN public match stats connector", tone: "verified" };
-  if (modeled) return { label: "Modeled", detail: "score is live; foul/card detail still needs a verified stat feed", tone: "modeled" };
+  if (modeled) return { label: "Waiting on stats", detail: "score is live; the detailed match sheet has not landed yet", tone: "modeled" };
   return { label: "Verified", detail: "stat feed connected", tone: "verified" };
 }
 
@@ -310,7 +310,7 @@ function outcomePrompts(match, stats, season) {
     `If ${dirtier.team} gets an early yellow, say: their normal discipline profile is already hot, so one more reckless foul could flip this from pressure to suspension risk.`,
     `If ${quieter.team} starts losing the foul count, say: that is more interesting than raw totals because they entered as the cleaner side in the cache.`,
     `If a penalty is given, say: ${stats.referee} is now tracking against a ${cleanNumber(season.pensPerMatch, 2)} pens-per-game baseline, so the next VAR review matters.`,
-    `If the foul gap reaches ${lop.noise80 + 1} or more, say: ${leader} are outside the medium noise band and the match is no longer just normal contact.`,
+    `If the foul gap reaches ${lop.noise80 + 1} or more, say: ${leader} are getting the rougher side of the whistle and the referee is becoming part of the story.`,
     `If ${stats.referee} reaches ${Math.max(5, Math.ceil(season.cardsPerMatch + 2))} cards, say: the game is running above this ref's card baseline and second-yellow management becomes the story.`
   ];
 }
@@ -326,9 +326,9 @@ function lopsidedAssessment(stats) {
   }
   const noise80 = Math.ceil(1.28 * Math.sqrt(total));
   const noise95 = Math.ceil(1.96 * Math.sqrt(total));
-  if (gap > noise95) return { home, away, total, gap, leader, noise80, noise95, level: "clear", label: "Clearly lopsided", confidence: "high" };
-  if (gap > noise80) return { home, away, total, gap, leader, noise80, noise95, level: "lean", label: "Leans lopsided", confidence: "medium" };
-  return { home, away, total, gap, leader, noise80, noise95, level: "normal", label: "Within noise band", confidence: "low" };
+  if (gap > noise95) return { home, away, total, gap, leader, noise80, noise95, level: "clear", label: "Heavy whistle tilt", confidence: "high" };
+  if (gap > noise80) return { home, away, total, gap, leader, noise80, noise95, level: "lean", label: "Whistle leaning", confidence: "medium" };
+  return { home, away, total, gap, leader, noise80, noise95, level: "normal", label: "Fairly even", confidence: "low" };
 }
 
 function selectedMatch() {
@@ -526,17 +526,18 @@ function fanRead(match, stats) {
 }
 
 function lopsidedCopy(stats, lop, quality) {
-  if (quality.tone === "projected") return `Projected foul split: ${stats.home_fouls}-${stats.away_fouls}. This is useful for pre-match shape, but it should not be read as an official match stat.`;
-  if (quality.tone === "modeled") return `Modeled foul split: ${stats.home_fouls}-${stats.away_fouls}. The gap is ${lop.gap}; treat the tilt as a watch signal until a verified foul feed replaces the cache.`;
-  return `${lop.leader} foul gap: ${lop.gap}. Expected noise band: ±${lop.noise80} medium, ±${lop.noise95} high confidence from ${lop.total} total fouls.`;
+  if (quality.tone === "projected") return `Pre-match foul read: ${stats.home_fouls}-${stats.away_fouls}. Use it as a matchup hint, then let the final whistle tell the truth.`;
+  if (quality.tone === "modeled") return `The live score is in, but the full match sheet is still catching up. Treat the ${stats.home_fouls}-${stats.away_fouls} split as temporary.`;
+  if (lop.level === "normal") return `The whistle has stayed pretty balanced: ${stats.home_fouls}-${stats.away_fouls} fouls from ${lop.total} total calls.`;
+  return `${lop.leader} are taking more of the whistle: ${stats.home_fouls}-${stats.away_fouls} fouls, a gap of ${lop.gap} calls.`;
 }
 
 function sourcePanel(stats, quality) {
   const links = stats.connector_links || [];
   return `
     <div class="source-panel ${quality.tone}">
-      <div><span>Source connector</span><b>${quality.label}</b></div>
-      <p>${quality.detail}. Fouls, cards, offsides, penalties, and VAR counts are only treated as verified when this panel links to a public match source.</p>
+      <div><span>Match source</span><b>${quality.label}</b></div>
+      <p>${quality.detail}. Fouls, cards, offsides, penalties, and VAR calls are only treated as final when this panel links to the public match source.</p>
       <div class="source-links">${links.map((link) => `<a href="${link.url}" target="_blank" rel="noreferrer">${link.label}</a>`).join("") || "<span>No verified connector attached yet.</span>"}</div>
     </div>
   `;
@@ -566,7 +567,7 @@ function refsView() {
       </section>
       <section class="board">
         <h2>Lopsided Whistles</h2>
-        <div class="table-list">${state.stats.filter((s) => lopsidedAssessment(s).level !== "normal").slice(0, 20).map(lopsidedItem).join("") || "<p>No match is outside the current foul-noise band.</p>"}</div>
+        <div class="table-list">${state.stats.filter((s) => lopsidedAssessment(s).level !== "normal").slice(0, 20).map(lopsidedItem).join("") || "<p>No match has a major whistle tilt right now.</p>"}</div>
       </section>
     </main>
   `;
@@ -614,7 +615,7 @@ function matchCard(match) {
         ${team(match.away)}
       </div>
       <div class="match-card-ref"><b>${stats.referee}</b><span>${stats.referee_country}</span></div>
-      <div class="quality-chip compact ${quality.tone}"><b>${quality.label}</b><span>${quality.tone === "projected" ? "pre-match" : quality.tone === "modeled" ? "needs stat feed" : "verified"}</span></div>
+      <div class="quality-chip compact ${quality.tone}"><b>${quality.label}</b><span>${quality.tone === "projected" ? "before kickoff" : quality.tone === "modeled" ? "awaiting sheet" : "final sheet"}</span></div>
       <div class="match-card-stats">
         <span>${totalFouls} fouls</span>
         <span>${totalCards} cards</span>
@@ -646,7 +647,7 @@ function refItem(ref) {
 
 function lopsidedItem(stats) {
   const lop = lopsidedAssessment(stats);
-  return `<button class="row-card warning" data-match="${stats.match_id}"><div><b>${stats.home} vs ${stats.away}</b><span>${stats.referee} · ${stats.referee_country}</span></div><strong>${stats.home_fouls}-${stats.away_fouls}</strong><em>gap ${lop.gap}, band ±${lop.noise80}/±${lop.noise95}</em></button>`;
+  return `<button class="row-card warning" data-match="${stats.match_id}"><div><b>${stats.home} vs ${stats.away}</b><span>${stats.referee} · ${stats.referee_country}</span></div><strong>${stats.home_fouls}-${stats.away_fouls}</strong><em>${lop.label.toLowerCase()} · ${lop.gap} call gap</em></button>`;
 }
 
 function teamItem(row) {
@@ -665,7 +666,7 @@ function lopsidedBar(match, stats) {
   const quality = statQuality(stats);
   const homePct = total ? Math.max(8, Math.min(92, (stats.home_fouls / total) * 100)) : 50;
   const awayPct = total ? Math.max(8, 100 - homePct) : 50;
-  const label = quality.tone === "projected" ? "projected" : quality.tone === "modeled" ? "modeled" : lop.level === "unknown" ? "No foul data yet" : lop.level === "normal" ? "fairly even" : `tilting toward ${lop.leader}`;
+  const label = quality.tone === "projected" ? "before kickoff" : quality.tone === "modeled" ? "awaiting sheet" : lop.level === "unknown" ? "No foul data yet" : lop.level === "normal" ? "fairly even" : `tilting toward ${lop.leader}`;
   return `
     <div class="tilt-meter ${lop.level} ${quality.tone}" aria-label="${match.home} ${stats.home_fouls} fouls, ${match.away} ${stats.away_fouls} fouls">
       <div class="tilt-label"><span>${match.home}</span><b>${label}</b><span>${match.away}</span></div>
@@ -685,13 +686,13 @@ function teamProfileModal(teamName, discipline) {
     const opponent = stat.home === teamName ? stat.away : stat.home;
     const fouls = stat.home === teamName ? stat.home_fouls : stat.away_fouls;
     const against = stat.home === teamName ? stat.away_fouls : stat.home_fouls;
-    return `<article class="mini-game"><b>${opponent}</b><span>${fouls}-${against} modeled fouls</span><em>${stat.referee} · ${stat.yellow_cards}Y ${stat.red_cards}R · ${stat.var_reviews} VAR</em></article>`;
+    return `<article class="mini-game"><b>${opponent}</b><span>${fouls}-${against} fouls</span><em>${stat.referee} · ${stat.yellow_cards}Y ${stat.red_cards}R · ${stat.var_reviews} VAR</em></article>`;
   }).join("") || `<p class="empty-note">No played match sample yet.</p>`;
   const projectionList = projections.slice(0, 3).map((stat) => {
     const opponent = stat.home === teamName ? stat.away : stat.home;
     const fouls = stat.home === teamName ? stat.home_fouls : stat.away_fouls;
     const against = stat.home === teamName ? stat.away_fouls : stat.home_fouls;
-    return `<article class="mini-game projected"><b>${opponent}</b><span>${fouls}-${against} projected</span><em>${stat.referee} · pre-match estimate</em></article>`;
+    return `<article class="mini-game projected"><b>${opponent}</b><span>${fouls}-${against} watch read</span><em>${stat.referee} · before kickoff</em></article>`;
   }).join("") || `<p class="empty-note">No future projections in the cache.</p>`;
   return `
     <div class="modal-backdrop" data-close-profile>
@@ -713,7 +714,7 @@ function teamProfileModal(teamName, discipline) {
           <div class="ref-games"><h3>Upcoming estimates</h3>${projectionList}</div>
           <div class="ref-games"><h3>Data read</h3><p class="empty-note">${teamDataRead(row, projections.length)}</p></div>
         </div>
-        <p class="profile-note">Played totals exclude future projections. Foul detail is still modeled until an official event/stat feed is connected to the worker.</p>
+        <p class="profile-note">Played totals exclude future fixtures. Completed match sheets come from the verified public connector.</p>
       </section>
     </div>
   `;
@@ -721,8 +722,8 @@ function teamProfileModal(teamName, discipline) {
 
 function teamProfileRead(row) {
   if (!row.matches) return "No real match sample yet, so this profile will fill in as the tournament cache grows.";
-  if (row.label === "dirty") return `${row.team} are near the top of the discipline table: rank ${row.rank}, ${cleanNumber(row.foulsPerMatch, 1)} modeled fouls per match, and ${row.atRisk} players already on watch.`;
-  if (row.label === "chippy") return `${row.team} are not out of control, but their played sample is busy: ${cleanNumber(row.foulsPerMatch, 1)} modeled fouls per match, ${row.yellows} yellows, and rank ${row.rank} overall.`;
+  if (row.label === "dirty") return `${row.team} are near the top of the discipline table: rank ${row.rank}, ${cleanNumber(row.foulsPerMatch, 1)} fouls per match, and ${row.atRisk} players already on watch.`;
+  if (row.label === "chippy") return `${row.team} are not out of control, but their played sample is busy: ${cleanNumber(row.foulsPerMatch, 1)} fouls per match, ${row.yellows} yellows, and rank ${row.rank} overall.`;
   return `${row.team} have mostly stayed out of the mess: ${cleanNumber(row.foulsPerMatch, 1)} fouls per match, with the card count still manageable.`;
 }
 
