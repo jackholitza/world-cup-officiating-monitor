@@ -269,8 +269,8 @@ function teamDirtyProfile(teamName) {
   const ranked = table.map((team) => ({ ...team, score: team.foulsPerMatch * 1.6 + team.yellows * 1.8 + team.reds * 5 + team.atRisk * 1.5 })).sort((a, b) => b.score - a.score);
   const rank = Math.max(1, ranked.findIndex((team) => team.team === teamName) + 1);
   let label = "quiet";
-  if (rank <= 8 || score >= 34) label = "dirty";
-  else if (rank <= 18 || score >= 24) label = "chippy";
+  if (rank <= 8) label = "dirty";
+  else if (rank <= 18 || row.foulsPerMatch >= 18 || row.yellows + row.reds >= 4) label = "chippy";
   return { ...row, score, rank, label };
 }
 
@@ -696,8 +696,8 @@ function teamProfileModal(teamName, discipline) {
 
 function teamProfileRead(row) {
   if (!row.matches) return "No real match sample yet, so this profile will fill in as the tournament cache grows.";
-  if (row.label === "dirty") return `${row.team} have been one of the hotter teams in the discipline table: rank ${row.rank}, ${cleanNumber(row.foulsPerMatch, 1)} fouls per match, and ${row.atRisk} players already on watch.`;
-  if (row.label === "chippy") return `${row.team} are not out of control, but they do play with an edge: ${cleanNumber(row.foulsPerMatch, 1)} fouls per match and ${row.yellows} yellows so far.`;
+  if (row.label === "dirty") return `${row.team} are near the top of the discipline table: rank ${row.rank}, ${cleanNumber(row.foulsPerMatch, 1)} modeled fouls per match, and ${row.atRisk} players already on watch.`;
+  if (row.label === "chippy") return `${row.team} are not out of control, but their played sample is busy: ${cleanNumber(row.foulsPerMatch, 1)} modeled fouls per match, ${row.yellows} yellows, and rank ${row.rank} overall.`;
   return `${row.team} have mostly stayed out of the mess: ${cleanNumber(row.foulsPerMatch, 1)} fouls per match, with the card count still manageable.`;
 }
 
