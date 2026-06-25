@@ -27,11 +27,17 @@
             <b>LOADING</b>
             <span>Historical officiating cache is starting up</span>
           </div>
-          <p class="fallback-copy">If this stays visible, refresh once. The dashboard is built to run from cached files and does not require a paid API token.</p>
+          <p class="fallback-copy">If this stays visible, open the public GitHub Pages URL or run a local server. Direct file:// opens can block JavaScript modules, but the dashboard is public and uses the free Cloudflare Worker cache.</p>
         </section>
       </main>
     </div>
     <script>
+      window.setTimeout(function () {
+        if (location.protocol !== "file:") return;
+        var copy = document.querySelector(".fallback-copy");
+        if (!copy) return;
+        copy.innerHTML = 'This local file view is blocked by the browser. Use <a href="https://jackholitza.github.io/world-cup-officiating-monitor/">GitHub Pages</a> or <a href="http://localhost:4173/">localhost</a> instead.';
+      }, 1400);
       window.addEventListener("error", function (event) {
         var app = document.getElementById("app");
         if (!app) return;
