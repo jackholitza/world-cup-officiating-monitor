@@ -58,11 +58,12 @@ export default {
     if (url.pathname === "/health") return health(env);
     if (url.pathname === "/refresh") return json(await refreshCache(env));
     if (url.pathname === "/games") return json(await games(env));
+    if (url.pathname === "/scoreboard") return json(await fetchEspnGames() || { ok: false, response: [] });
     if (url.pathname === "/match-stats") return json(await matchStats(env));
     if (url.pathname === "/") return json({
       name: "world-cup-officiating-monitor-api",
       plan: "free scheduled cache worker",
-      endpoints: ["/health", "/refresh", "/games", "/match-stats"]
+      endpoints: ["/health", "/refresh", "/games", "/scoreboard", "/match-stats"]
     });
     return json({ error: "not found" }, 404);
   },
@@ -118,6 +119,8 @@ async function refreshCache(env) {
 }
 
 async function fetchGames(env) {
+  const espn = await fetchEspnGames();
+  if (espn?.response?.length) return annotate(espn, "espn-public-scoreboard");
   const live = await tryJson("https://wc26liveapi.jack-holitza.workers.dev/games");
   if (live) return annotate(live, "wclive-worker");
   if (hasReddit(env)) {
@@ -125,6 +128,63 @@ async function fetchGames(env) {
     if (reddit) return annotate(reddit, "reddit-oauth-free");
   }
   return null;
+}
+
+async function fetchEspnGames() {
+  const start = new Date();
+  start.setUTCDate(start.getUTCDate() - 1);
+  const stop = new Date();
+  stop.setUTCDate(stop.getUTCDate() + 3);
+  const events = [];
+  for (const date of dateRange(start.toISOString().slice(0, 10), stop.toISOString().slice(0, 10))) {
+    const scoreboard = await tryJson(`https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=${date.replaceAll("-", "")}`);
+    events.push(...(scoreboard?.events || []));
+  }
+
+  const assignmentWindow = Date.now() + 48 * 60 * 60 * 1000;
+  const assignmentEvents = events.filter((event) => {
+    const completed = event.competitions?.[0]?.status?.type?.completed;
+    return !completed && new Date(event.date).getTime() <= assignmentWindow;
+  }).slice(0, 12);
+  const assignments = new Map((await Promise.all(assignmentEvents.map(async (event) => {
+    const summary = await tryJson(`https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event=${event.id}`);
+    const official = summary?.gameInfo?.officials?.find((item) => item.position?.displayName === "Referee") || summary?.gameInfo?.officials?.[0];
+    if (!official) return null;
+    const name = official.displayName || official.fullName;
+    const profile = refereeProfileFor(name);
+    return [String(event.id), { referee: name, referee_country: profile?.country || "Country not listed" }];
+  }))).filter(Boolean));
+
+  const response = events.map((event) => {
+    const competition = event.competitions?.[0] || {};
+    const home = competition.competitors?.find((team) => team.homeAway === "home") || competition.competitors?.[0] || {};
+    const away = competition.competitors?.find((team) => team.homeAway === "away") || competition.competitors?.[1] || {};
+    const status = competition.status?.type || event.status?.type || {};
+    const assignment = assignments.get(String(event.id)) || {};
+    return {
+      id: event.id,
+      match_id_api: event.id,
+      home_team_name_en: canonicalTeam(home.team?.displayName),
+      away_team_name_en: canonicalTeam(away.team?.displayName),
+      home_score: home.score ?? null,
+      away_score: away.score ?? null,
+      local_date: event.date,
+      finished: Boolean(status.completed),
+      time_elapsed: status.completed ? "finished" : status.state === "in" ? (competition.status?.displayClock || "live") : "scheduled",
+      status: status.name || "scheduled",
+      group: groupFor(canonicalTeam(home.team?.displayName), canonicalTeam(away.team?.displayName)),
+      referee: assignment.referee || "Assignment pending",
+      referee_country: assignment.referee_country || "Country pending"
+    };
+  }).filter((row) => row.home_team_name_en && row.away_team_name_en);
+
+  return {
+    ok: true,
+    source: "espn-public-scoreboard",
+    fetched_at: new Date().toISOString(),
+    response_count: response.length,
+    response
+  };
 }
 
 async function fetchMatchStats(env, cachedStats = null) {

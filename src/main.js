@@ -11,11 +11,16 @@ const byTeam = new Map(teams.map((team) => [team.country, team]));
 const fixtureById = new Map(fixtures.map((match) => [match.match_id, match]));
 const playerById = new Map(players.map((player) => [player.player_id, player]));
 const refereeByName = new Map(referees.map((ref) => [ref.name, ref]));
+const initialMatch = fixtures.find((match) => {
+  const date = new Date(match.datetime_mt);
+  const now = new Date();
+  return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+}) || fixtures.find((match) => new Date(match.datetime_mt).getTime() >= Date.now()) || fixtures[0];
 const state = {
   games: [],
   stats: disciplineSeed.results.map(normalizeStats),
   active: "today",
-  selectedMatchId: "GA1",
+  selectedMatchId: initialMatch.match_id,
   selectedTeam: "Mexico",
   profileTeam: null,
   sort: "all",
@@ -53,7 +58,8 @@ function normalizeGame(row) {
   const away = canonicalTeam(row.away_team_name_en || row.away || row.team_b);
   const match = findFixture(home, away, row.match_id || row.match_id_api || row.id);
   const status = String(row.time_elapsed || row.status || "").toLowerCase();
-  const finished = row.finished === true || String(row.finished).toLowerCase() === "true" || status === "finished";
+  const finished = row.finished === true || String(row.finished).toLowerCase() === "true" || status === "finished" || status === "full_time";
+  const started = finished || !["", "scheduled", "notstarted", "pre", "status_scheduled"].includes(status);
   return {
     match_id: match?.match_id || row.match_id || row.match_id_api || row.id,
     api_id: row.id || row.match_id_api,
@@ -61,13 +67,15 @@ function normalizeGame(row) {
     away: match?.away || away,
     home_score: number(row.home_score ?? row.home_goals),
     away_score: number(row.away_score ?? row.away_goals),
-    has_score: !["", null, undefined, "null"].includes(row.home_score ?? row.home_goals) && !["", null, undefined, "null"].includes(row.away_score ?? row.away_goals),
+    has_score: started && !["", null, undefined, "null"].includes(row.home_score ?? row.home_goals) && !["", null, undefined, "null"].includes(row.away_score ?? row.away_goals),
     finished,
     time_elapsed: finished ? "finished" : status || "scheduled",
     group: match?.group || row.group,
     local_date: row.local_date || match?.datetime_mt,
     home_scorers: parseScorers(row.home_scorers),
-    away_scorers: parseScorers(row.away_scorers)
+    away_scorers: parseScorers(row.away_scorers),
+    referee: row.referee || "Assignment pending",
+    referee_country: row.referee_country || "Country pending"
   };
 }
 
@@ -119,7 +127,17 @@ function gameFor(match) {
 }
 
 function statsFor(match) {
-  return state.stats.find((row) => row.match_id === match.match_id) || normalizeStats({ match_id: match.match_id, home: match.home, away: match.away });
+  const found = state.stats.find((row) => row.match_id === match.match_id);
+  if (found) return found;
+  const game = gameFor(match);
+  return normalizeStats({
+    match_id: match.match_id,
+    home: match.home,
+    away: match.away,
+    referee: game?.referee,
+    referee_country: game?.referee_country,
+    source: "espn-public-schedule"
+  });
 }
 
 function matchForStat(stat) {
@@ -278,6 +296,76 @@ function teamDirtyProfile(teamName) {
   return { ...row, score, rank, label };
 }
 
+function tournamentBaseline() {
+  const rows = playedStats();
+  const matches = Math.max(1, rows.length);
+  const fouls = rows.reduce((sum, row) => sum + row.home_fouls + row.away_fouls, 0);
+  const cards = rows.reduce((sum, row) => sum + row.yellow_cards + row.red_cards, 0);
+  const vars = rows.reduce((sum, row) => sum + row.var_reviews, 0);
+  return {
+    teamFouls: fouls / (matches * 2) || 11.5,
+    matchFouls: fouls / matches || 23,
+    cards: cards / matches || 4.2,
+    vars: vars / matches || 0.7
+  };
+}
+
+function expectedMatch(match, stats = statsFor(match)) {
+  const baseline = tournamentBaseline();
+  const home = teamDirtyProfile(match.home);
+  const away = teamDirtyProfile(match.away);
+  const season = refSeason(stats.referee);
+  const homeCards = home.matches ? (home.yellows + home.reds) / home.matches : baseline.cards / 2;
+  const awayCards = away.matches ? (away.yellows + away.reds) / away.matches : baseline.cards / 2;
+  const homeFoulRate = (home.fouls + baseline.teamFouls * 2) / (home.matches + 2);
+  const awayFoulRate = (away.fouls + baseline.teamFouls * 2) / (away.matches + 2);
+  const refFoulRate = season.matches ? season.foulsPerMatch : baseline.matchFouls;
+  const refFactor = Math.max(.82, Math.min(1.18, refFoulRate / baseline.matchFouls));
+  const homeFouls = homeFoulRate * refFactor;
+  const awayFouls = awayFoulRate * refFactor;
+  const refCards = season.matches ? season.cardsPerMatch : baseline.cards;
+  const cards = refCards * .6 + (homeCards + awayCards) * .4;
+  const vars = (season.matches ? season.varPerMatch : baseline.vars) * .7 + baseline.vars * .3;
+  const homeHeat = homeFouls + homeCards * .8;
+  const awayHeat = awayFouls + awayCards * .8;
+  const dirtier = homeHeat >= awayHeat ? match.home : match.away;
+  return {
+    homeFouls,
+    awayFouls,
+    cards,
+    vars,
+    cardChance: poissonAtLeast(cards, 4),
+    dirtier,
+    refSample: season.matches,
+    homeSample: home.matches,
+    awaySample: away.matches
+  };
+}
+
+function poissonAtLeast(lambda, threshold) {
+  let term = Math.exp(-lambda);
+  let cumulative = term;
+  for (let k = 1; k < threshold; k += 1) {
+    term *= lambda / k;
+    cumulative += term;
+  }
+  return Math.max(0, Math.min(1, 1 - cumulative));
+}
+
+function projectionRead(match, projection, stats) {
+  const assignment = stats.referee === "Assignment pending"
+    ? "The referee assignment has not been published yet, so the card estimate uses the tournament average."
+    : `${stats.referee}'s ${projection.refSample || "limited"}-match tournament record is included.`;
+  return `${projection.dirtier} project as the busier side defensively. There is a ${Math.round(projection.cardChance * 100)}% chance of four or more cards. ${assignment}`;
+}
+
+function dirtiestPlayers(discipline = playerDiscipline()) {
+  return discipline
+    .map((player) => ({ ...player, heat: (player.red || 0) * 8 + player.yellow * 4 + (player.fouls || 0) }))
+    .filter((player) => player.heat > 0)
+    .sort((a, b) => b.heat - a.heat || b.yellow - a.yellow || (b.fouls || 0) - (a.fouls || 0));
+}
+
 function refMatchupRead(match, stats, season) {
   const home = teamDirtyProfile(match.home);
   const away = teamDirtyProfile(match.away);
@@ -367,8 +455,7 @@ function render() {
   app.innerHTML = `
     <header class="topbar">
       <div><span>World Cup discipline tracker</span><h1>Ref Watch</h1></div>
-      <button class="refresh" data-refresh>↻</button>
-      <div class="feed-status"><b>${runtimeLabel()} · ${state.status}</b><small>${state.updated.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</small></div>
+      <button class="refresh" data-refresh aria-label="Refresh match data" title="Refresh match data · updated ${state.updated.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}">↻</button>
     </header>
     <nav class="tabs">
       ${tab("today", "Today")}
@@ -406,6 +493,9 @@ function todayView(match, stats, game, discipline) {
   const risks = discipline.filter((player) => [match.home, match.away].includes(player.team) && (player.atRisk || player.red)).slice(0, 8);
   const lop = lopsidedAssessment(stats);
   const quality = statQuality(stats);
+  const played = isPlayedMatch(match);
+  const projection = expectedMatch(match, stats);
+  const dirtyPlayers = dirtiestPlayers(discipline).slice(0, 8);
   return `
     <main class="matchday">
       <section class="match-board">
@@ -435,20 +525,22 @@ function todayView(match, stats, game, discipline) {
           <b>${stats.referee}</b>
           <em>${stats.referee_country} · ${stats.confederation || ref.confederation || "FIFA"}</em>
         </div>
-        <div class="stat-row">
-          ${pill("Fouls", `${stats.home_fouls}-${stats.away_fouls}`)}
-          ${pill("Cards", `${stats.yellow_cards}Y ${stats.red_cards}R`)}
-          ${pill("Offside", `${stats.home_offsides}-${stats.away_offsides}`)}
-          ${pill("VAR", `${stats.var_reviews}`)}
-        </div>
-        <div class="fan-read">${fanRead(match, stats)}</div>
-        <div class="lopsided-card ${lop.level}">
-          <div><span>Lopsidedness</span><b>${lop.label}</b></div>
-          <p>${lopsidedCopy(stats, lop, quality)}</p>
-        </div>
+        ${played ? `
+          <div class="stat-row">
+            ${pill("Fouls", `${stats.home_fouls}-${stats.away_fouls}`)}
+            ${pill("Cards", `${stats.yellow_cards}Y ${stats.red_cards}R`)}
+            ${pill("Offside", `${stats.home_offsides}-${stats.away_offsides}`)}
+            ${pill("VAR", `${stats.var_reviews}`)}
+          </div>
+          <div class="fan-read">${fanRead(match, stats)}</div>
+          <div class="lopsided-card ${lop.level}">
+            <div><span>Whistle balance</span><b>${lop.label}</b></div>
+            <p>${lopsidedCopy(stats, lop, quality)}</p>
+          </div>
+        ` : projectionPanel(match, stats, projection)}
         ${sourcePanel(stats, quality)}
         <div class="ref-season">
-          <h2>${stats.referee}'s tournament</h2>
+          <h2>${stats.referee === "Assignment pending" ? "Referee outlook" : `${stats.referee}'s tournament`}</h2>
           <div class="stat-row">
             ${pill("Matches", season.matches)}
             ${pill("Pens/game", cleanNumber(season.pensPerMatch, 2))}
@@ -465,7 +557,12 @@ function todayView(match, stats, game, discipline) {
           <h2>Whiteboard reads</h2>
           <div class="prompt-list">${outcomePrompts(match, stats, season).map((prompt) => `<p>${prompt}</p>`).join("")}</div>
         </div>
-        ${pitch(stats)}
+        ${pitch(stats, played ? null : projection)}
+      </section>
+      <section class="side-panel dirty-board">
+        <div class="panel-heading"><div><span>Tournament watch</span><h2>Dirtiest players so far</h2></div><b>${playedStats().length} matches</b></div>
+        <p class="panel-intro">The players collecting the most cards and logged fouls in the verified match feed.</p>
+        <div class="player-list dirty-list">${dirtyPlayers.map(dirtyPlayerItem).join("") || "<p>No player discipline events are available yet.</p>"}</div>
       </section>
       <section class="side-panel">
         <h2>Match feed</h2>
@@ -593,11 +690,41 @@ function pill(label, value) {
   return `<div class="pill"><span>${label}</span><b>${value}</b></div>`;
 }
 
-function pitch(stats) {
-  const total = Math.max(1, stats.home_fouls + stats.away_fouls);
-  const home = Math.max(12, (number(stats.home_fouls) / total) * 78);
-  const away = Math.max(12, (number(stats.away_fouls) / total) * 78);
-  return `<div class="pitch"><div class="half home" style="width:${home}%"><b>${stats.home_fouls}</b><span>home fouls</span></div><div class="half away" style="width:${away}%"><b>${stats.away_fouls}</b><span>away fouls</span></div></div>`;
+function projectionPanel(match, stats, projection) {
+  return `
+    <section class="projection-card">
+      <div class="projection-head"><div><span>Pre-match forecast</span><h2>How physical could this get?</h2></div><b>Expected</b></div>
+      <div class="stat-row projection-stats">
+        ${pill("xFouls", `${cleanNumber(projection.homeFouls, 1)}-${cleanNumber(projection.awayFouls, 1)}`)}
+        ${pill("xCards", cleanNumber(projection.cards, 1))}
+        ${pill("xVAR", cleanNumber(projection.vars, 2))}
+        ${pill("4+ cards", `${Math.round(projection.cardChance * 100)}%`)}
+      </div>
+      <div class="forecast-verdict"><span>Likely busier side</span><b>${projection.dirtier}</b></div>
+      <p>${projectionRead(match, projection, stats)}</p>
+      ${projectedTiltBar(match, projection)}
+    </section>`;
+}
+
+function projectedTiltBar(match, projection) {
+  const total = projection.homeFouls + projection.awayFouls;
+  const homePct = Math.max(12, Math.min(88, projection.homeFouls / total * 100));
+  return `
+    <div class="tilt-meter projected" aria-label="Expected fouls: ${match.home} ${cleanNumber(projection.homeFouls, 1)}, ${match.away} ${cleanNumber(projection.awayFouls, 1)}">
+      <div class="tilt-label"><span>${match.home}</span><b>expected foul share</b><span>${match.away}</span></div>
+      <div class="tilt-track"><span class="tilt-home" style="width:${homePct}%"></span><span class="tilt-away" style="width:${100 - homePct}%"></span></div>
+      <div class="tilt-count"><span>x${cleanNumber(projection.homeFouls, 1)}</span><span>x${cleanNumber(projection.awayFouls, 1)}</span></div>
+    </div>`;
+}
+
+function pitch(stats, projection = null) {
+  const homeFouls = projection?.homeFouls ?? stats.home_fouls;
+  const awayFouls = projection?.awayFouls ?? stats.away_fouls;
+  const total = Math.max(1, homeFouls + awayFouls);
+  const home = Math.max(12, (homeFouls / total) * 78);
+  const away = Math.max(12, (awayFouls / total) * 78);
+  const prefix = projection ? "x" : "";
+  return `<div class="pitch ${projection ? "projected" : ""}"><div class="half home" style="width:${home}%"><b>${prefix}${cleanNumber(homeFouls, projection ? 1 : 0)}</b><span>${projection ? "expected " : ""}home fouls</span></div><div class="half away" style="width:${away}%"><b>${prefix}${cleanNumber(awayFouls, projection ? 1 : 0)}</b><span>${projection ? "expected " : ""}away fouls</span></div></div>`;
 }
 
 function matchCard(match) {
@@ -606,6 +733,8 @@ function matchCard(match) {
   const quality = statQuality(stats);
   const totalCards = stats.yellow_cards + stats.red_cards;
   const totalFouls = stats.home_fouls + stats.away_fouls;
+  const played = isPlayedMatch(match);
+  const projection = expectedMatch(match, stats);
   return `
     <button class="match-card ${match.match_id === state.selectedMatchId ? "active" : ""}" data-match="${match.match_id}">
       <div class="match-card-top"><span>${matchStatus(match)}</span><em>Group ${match.group}</em></div>
@@ -616,12 +745,13 @@ function matchCard(match) {
       </div>
       <div class="match-card-ref"><b>${stats.referee}</b><span>${stats.referee_country}</span></div>
       <div class="quality-chip compact ${quality.tone}"><b>${quality.label}</b><span>${quality.tone === "projected" ? "before kickoff" : quality.tone === "modeled" ? "awaiting sheet" : "final sheet"}</span></div>
-      <div class="match-card-stats">
-        <span>${totalFouls} fouls</span>
-        <span>${totalCards} cards</span>
-        <span>${stats.var_reviews} VAR</span>
+      <div class="match-card-stats ${played ? "" : "expected"}">
+        <span>${played ? totalFouls : `xF ${cleanNumber(projection.homeFouls + projection.awayFouls, 1)}`}</span>
+        <span>${played ? `${totalCards} cards` : `xC ${cleanNumber(projection.cards, 1)}`}</span>
+        <span>${played ? `${stats.var_reviews} VAR` : `xVAR ${cleanNumber(projection.vars, 2)}`}</span>
       </div>
-      ${lopsidedBar(match, stats)}
+      ${played ? lopsidedBar(match, stats) : projectedTiltBar(match, projection)}
+      ${played ? "" : `<div class="card-chance"><b>${Math.round(projection.cardChance * 100)}%</b><span>chance of 4+ cards</span><em>${projection.dirtier} likely busier</em></div>`}
     </button>
   `;
 }
@@ -640,9 +770,14 @@ function playerItem(player) {
   return `<article class="row-card ${player.red ? "danger" : player.atRisk ? "warning" : ""}">${team(player.team)}<div><b>${player.player_name}</b><span>${meta.position || ""} ${meta.club ? `· ${meta.club}` : ""}</span></div><strong>${player.yellow}Y ${player.red}R</strong><em>${player.fouls || 0} fouls</em></article>`;
 }
 
+function dirtyPlayerItem(player, index) {
+  const meta = playerById.get(player.player_id) || {};
+  return `<article class="dirty-player"><strong>${index + 1}</strong><div><b>${player.player_name}</b><span>${player.team}${meta.position ? ` · ${meta.position}` : ""}</span></div><em>${player.yellow}Y ${player.red}R · ${player.fouls || 0} fouls</em></article>`;
+}
+
 function refItem(ref) {
   const tone = ref.lopsided > ref.fair ? "warning" : "good";
-  return `<article class="row-card ${tone}"><div><b>${ref.name}</b><span>${ref.country}</span></div><strong>${ref.matches} matches</strong><em>${ref.yellows}Y ${ref.reds}R · ${ref.lopsided} outside band</em></article>`;
+  return `<article class="row-card ${tone}"><div><b>${ref.name}</b><span>${ref.country}</span></div><strong>${ref.matches} matches</strong><em>${ref.yellows}Y ${ref.reds}R · ${ref.lopsided} with a strong foul tilt</em></article>`;
 }
 
 function lopsidedItem(stats) {

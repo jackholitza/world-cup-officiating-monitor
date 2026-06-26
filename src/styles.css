@@ -37,7 +37,7 @@ p { line-height: 1.45; }
   top: 0;
   z-index: 5;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   padding: 18px clamp(14px, 4vw, 42px);
@@ -67,6 +67,14 @@ p { line-height: 1.45; }
   background: var(--ink);
   color: #fff;
   font-size: 22px;
+  font-weight: 900;
+  box-shadow: 3px 3px 0 var(--yellow);
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+
+.refresh:hover {
+  transform: translateY(-2px) rotate(-12deg);
+  box-shadow: 4px 5px 0 var(--yellow);
 }
 
 .feed-status {
@@ -197,6 +205,12 @@ em,
   color: var(--ink);
   padding: 12px;
   text-align: left;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+
+.match-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 4px 5px 0 rgba(16, 16, 16, .16);
 }
 
 .match-card:nth-child(3n + 1) { transform: rotate(-.25deg); }
@@ -229,6 +243,34 @@ em,
   color: var(--muted);
   font-size: 12px;
 }
+
+.match-card-stats.expected span {
+  color: var(--ink);
+  font-weight: 900;
+}
+
+.card-chance {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1px 8px;
+  align-items: center;
+  border-top: 2px dashed var(--soft-line);
+  padding-top: 8px;
+}
+
+.card-chance b {
+  grid-row: span 2;
+  color: var(--ink);
+  font-size: 25px;
+}
+
+.card-chance span,
+.card-chance em {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.card-chance em { font-weight: 900; }
 
 .quality-chip {
   display: flex;
@@ -469,7 +511,8 @@ em,
 .lopsided-card,
 .ref-season,
 .prompt-board,
-.source-panel {
+.source-panel,
+.projection-card {
   display: grid;
   gap: 10px;
   min-width: 0;
@@ -477,6 +520,63 @@ em,
   border-radius: 8px;
   background: var(--paper);
   padding: 12px;
+}
+
+.projection-card {
+  gap: 13px;
+  border-width: 3px;
+  background:
+    linear-gradient(90deg, var(--yellow) 0 10px, transparent 10px),
+    var(--paper);
+  padding-left: 22px;
+}
+
+.projection-head,
+.panel-heading,
+.forecast-verdict {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.projection-head span,
+.panel-heading span,
+.forecast-verdict span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.projection-head > b,
+.panel-heading > b {
+  flex: 0 0 auto;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  background: var(--yellow);
+  padding: 5px 9px;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.projection-stats .pill:nth-child(1) { background: #fff8d6; }
+.projection-stats .pill:nth-child(2) { background: #fff0a8; }
+.projection-stats .pill:nth-child(3) { background: #e8f4ff; }
+.projection-stats .pill:nth-child(4) { background: #ffe6e6; }
+
+.forecast-verdict {
+  border: 2px solid var(--line);
+  background: var(--red);
+  padding: 9px 11px;
+}
+
+.forecast-verdict b { font-size: 18px; }
+
+.projection-card > p,
+.panel-intro {
+  color: var(--pencil);
+  font-weight: 800;
 }
 
 .lopsided-card div {
@@ -639,6 +739,53 @@ em,
   display: grid;
   gap: 12px;
   align-content: start;
+}
+
+.dirty-board {
+  border-top: 10px solid var(--yellow);
+}
+
+.dirty-list { gap: 0; }
+
+.dirty-player {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  border-bottom: 2px dashed var(--soft-line);
+  padding: 10px 2px;
+}
+
+.dirty-player > strong {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 2px solid var(--line);
+  border-radius: 50%;
+  background: var(--yellow);
+}
+
+.dirty-player div {
+  display: grid;
+  min-width: 0;
+}
+
+.dirty-player span,
+.dirty-player em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.dirty-player em {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.pitch.projected {
+  border-style: dashed;
+  opacity: .86;
 }
 
 .side-panel h2,
@@ -831,6 +978,15 @@ em,
   }
 
   .row-card em {
+    text-align: left;
+  }
+
+  .dirty-player {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .dirty-player em {
+    grid-column: 2;
     text-align: left;
   }
 }
