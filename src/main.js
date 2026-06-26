@@ -11,11 +11,11 @@ const byTeam = new Map(teams.map((team) => [team.country, team]));
 const fixtureById = new Map(fixtures.map((match) => [match.match_id, match]));
 const playerById = new Map(players.map((player) => [player.player_id, player]));
 const refereeByName = new Map(referees.map((ref) => [ref.name, ref]));
-const initialMatch = fixtures.find((match) => {
+const initialMatch = fixtures.find((match) => new Date(match.datetime_mt).getTime() >= Date.now()) || fixtures.find((match) => {
   const date = new Date(match.datetime_mt);
   const now = new Date();
   return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
-}) || fixtures.find((match) => new Date(match.datetime_mt).getTime() >= Date.now()) || fixtures[0];
+}) || fixtures[0];
 const state = {
   games: [],
   stats: disciplineSeed.results.map(normalizeStats),
@@ -23,7 +23,7 @@ const state = {
   selectedMatchId: initialMatch.match_id,
   selectedTeam: "Mexico",
   profileTeam: null,
-  sort: "all",
+  sort: "today",
   status: "cache",
   updated: new Date()
 };
@@ -167,8 +167,8 @@ function statQuality(stats) {
   const verified = source.includes("espn-public-verified") || confidence.includes("verified");
   if (!played) return { label: "Fixture watch", detail: "pre-match read, waiting for the final match sheet", tone: "projected" };
   if (verified) return { label: "Verified", detail: "ESPN public match stats connector", tone: "verified" };
-  if (modeled) return { label: "Waiting on stats", detail: "score is live; the detailed match sheet has not landed yet", tone: "modeled" };
-  return { label: "Verified", detail: "stat feed connected", tone: "verified" };
+  if (modeled || source.includes("schedule") || stats.referee === "Assignment pending") return { label: "Waiting on stats", detail: "the detailed ESPN match sheet has not landed yet", tone: "modeled" };
+  return { label: "Source pending", detail: "the match needs a verified public match sheet", tone: "modeled" };
 }
 
 function matchStatus(match) {
@@ -792,7 +792,9 @@ function teamItem(row) {
 function matchButton(match) {
   const game = gameFor(match);
   const stats = statsFor(match);
-  return `<button class="match-button ${match.match_id === state.selectedMatchId ? "active" : ""}" data-match="${match.match_id}"><span>${matchStatus(match)}</span><b>${match.home} ${scoreText(game, "-")} ${match.away}</b><em>${stats.referee}</em>${lopsidedBar(match, stats)}</button>`;
+  const played = isPlayedMatch(match);
+  const balance = played ? lopsidedBar(match, stats) : projectedTiltBar(match, expectedMatch(match, stats));
+  return `<button class="match-button ${match.match_id === state.selectedMatchId ? "active" : ""}" data-match="${match.match_id}"><span>${matchStatus(match)}</span><b>${match.home} ${scoreText(game, "-")} ${match.away}</b><em>${stats.referee}</em>${balance}</button>`;
 }
 
 function lopsidedBar(match, stats) {
