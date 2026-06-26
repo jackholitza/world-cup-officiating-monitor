@@ -606,6 +606,17 @@ function sortedMatches() {
   list.sort((a, b) => {
     if (state.sort === "cards") return statsFor(b).yellow_cards + statsFor(b).red_cards * 2 - (statsFor(a).yellow_cards + statsFor(a).red_cards * 2);
     if (state.sort === "fouls") return statsFor(b).home_fouls + statsFor(b).away_fouls - (statsFor(a).home_fouls + statsFor(a).away_fouls);
+    if (state.sort === "today") {
+      const priority = (match) => {
+        const game = gameFor(match);
+        const live = game && !game.finished && !["scheduled", "notstarted", ""].includes(game.time_elapsed);
+        if (live) return 0;
+        if (!isPlayedMatch(match)) return 1;
+        return 2;
+      };
+      const priorityGap = priority(a) - priority(b);
+      if (priorityGap) return priorityGap;
+    }
     return new Date(a.datetime_mt) - new Date(b.datetime_mt);
   });
   return list.slice(0, state.sort === "today" ? 16 : state.sort === "all" ? fixtures.length : 28);
